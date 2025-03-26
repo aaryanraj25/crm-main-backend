@@ -5,6 +5,7 @@ from database import get_database, employee_collection, admins_collection
 from security import get_current_admin
 from datetime import datetime, timezone
 from bson import ObjectId
+from services.email_service import send_employee_invitation
 
 
 
@@ -24,10 +25,10 @@ def convert_objectid_to_str(document):
 
 @router.post("/admin/create-employee")
 async def create_employee(
-    email: str, 
-    name: str, 
-    db: AsyncIOMotorDatabase = Depends(get_database), 
-    admin: dict = Depends(get_current_admin)  # Ensure admin is passed
+    email: str,
+    name: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    admin: dict = Depends(get_current_admin)
 ):
     """Admin creates an employee with email, name, and organization details"""
 
@@ -81,6 +82,8 @@ async def create_employee(
         {"_id": ObjectId(org_id)}, 
         {"$inc": {"total_employees": 1}}  # Increment employee count
     )
+
+    await send_employee_invitation(email, name, org_name)
 
     return {
         "message": "Employee created successfully",

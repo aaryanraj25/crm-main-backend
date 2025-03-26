@@ -3,6 +3,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database, admins_collection
 from bson import ObjectId
 from security import get_current_superadmin
+from services.email_service import send_approval_email
 
 router = APIRouter()
 
@@ -43,10 +44,9 @@ async def verify_admin(
     db: AsyncIOMotorDatabase = Depends(get_database),
     superadmin: dict = Depends(get_current_superadmin)
 ):
-    admin = await admins_collection.find_one({"_id": admin_id})
     try:
-        object_id = ObjectId(admin_id)  # ✅ Convert string ID to ObjectId
-    except:  # noqa: E722
+        object_id = ObjectId(admin_id)
+    except:
         raise HTTPException(status_code=400, detail="Invalid Admin ID format")
 
     admin = await admins_collection.find_one({"_id": object_id})
@@ -57,5 +57,8 @@ async def verify_admin(
         raise HTTPException(status_code=400, detail="Admin is already verified")
 
     await admins_collection.update_one({"_id": object_id}, {"$set": {"is_verified": True}})
+
+    # Send approval email
+    await send_approval_email(admin["email"], admin["name"])
 
     return {"message": "Admin verified successfully"}
