@@ -59,7 +59,7 @@ async def clock_in(
     work_from_home: bool = False,  # Default to False if not provided
     employee: dict = Depends(get_current_employee)
 ):
-    employee_id = employee.get("employee_id"
+    employee_id = employee.get("employee_id")
     
     if not employee_id:
         raise HTTPException(status_code=401, detail="Invalid token")
