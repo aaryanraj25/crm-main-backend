@@ -23,7 +23,7 @@ def convert_objectid_to_str(document):
                 document[key] = [str(v) if isinstance(v, ObjectId) else v for v in value]
     return document
 
-@router.get("/employee/profile")
+@router.get("/profile")
 async def get_employee_profile(
     employee: dict = Depends(get_current_employee),
     db: AsyncIOMotorDatabase = Depends(get_database)
@@ -54,7 +54,7 @@ async def get_employee_profile(
         "admin_profile": admin_data
     }
 
-@router.post("/employee/clock-in")
+@router.post("/clock-in")
 async def clock_in(
     work_from_home: bool = False,  # Default to False if not provided
     employee: dict = Depends(get_current_employee)
@@ -96,7 +96,7 @@ async def clock_in(
     }    
     
     
-@router.post("/employee/clock-out")
+@router.post("/clock-out")
 async def clock_out(
     employee: dict = Depends(get_current_employee)
 ):
@@ -137,7 +137,7 @@ async def clock_out(
     }
     
     
-@router.post("/employee/clinics")
+@router.post("/clinics")
 async def add_clinic(
     clinic: ClinicModel,
     employee: dict = Depends(get_current_employee)
