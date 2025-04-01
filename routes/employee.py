@@ -135,6 +135,32 @@ async def clock_out(
         "message": "Clock-out successful",
         "clock_out_time": clock_out_time
     }
+
+@router.post("/location")
+async def post_employee_location(
+    latitude: float,
+    longitude: float,
+    employee: dict = Depends(get_current_employee),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Allows an employee to post their current location (latitude and longitude).
+    """
+    employee_id = employee.get("employee_id")
+
+    if not employee_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Update the employee's location in the database
+    await employee_collection.update_one(
+        {"_id": ObjectId(employee_id)},
+        {"$set": {"location": {"latitude": latitude, "longitude": longitude, "updated_at": datetime.now(timezone.utc)}}}
+    )
+
+    return {
+        "message": "Location updated successfully",
+        "location": {"latitude": latitude, "longitude": longitude}
+    }
     
     
 @router.post("/clinics")

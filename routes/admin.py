@@ -93,6 +93,50 @@ async def create_employee(
         "created_at": employee_data["created_at"]
     }
 
+
+@router.get("/employee-location/{employee_id}")
+async def get_employee_location(
+    employee_id: str,
+    admin: dict = Depends(get_current_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Allows an admin to fetch an employee's location and provides a Google Maps URL.
+    """
+    organization_id = admin.get("organization_id")
+
+    if not organization_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Fetch the employee's location
+    employee = await employee_collection.find_one(
+        {"_id": ObjectId(employee_id), "organization_id": organization_id},
+        {"location": 1, "name": 1}
+    )
+
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found or does not belong to your organization")
+
+    location = employee.get("location")
+    if not location:
+        raise HTTPException(status_code=404, detail="Location not available for this employee")
+
+    latitude = location.get("latitude")
+    longitude = location.get("longitude")
+
+    # Generate Google Maps URL
+    google_maps_url = f"https://www.google.com/maps?q={latitude},{longitude}"
+
+    return {
+        "employee_name": employee.get("name"),
+        "location": {
+            "latitude": latitude,
+            "longitude": longitude,
+            "updated_at": location.get("updated_at")
+        },
+        "google_maps_url": google_maps_url
+    }
+
     
     
 @router.get("/employees")    
