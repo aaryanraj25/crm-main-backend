@@ -44,9 +44,9 @@ app.add_middleware(
 app.include_router(superadmin_Router, prefix="/verification", tags=["SuperAdmin"])
 app.include_router(admin_router, prefix="/admin", tags=["Admin"])
 app.include_router(superadmin_router, prefix="/auth/superadmin", tags=["SuperAdmin"])
-app.include_router(admin_Router, prefix="/admin", tags=["employee"])
-app.include_router(employee_router, prefix="/employee", tags=["employee"])
-app.include_router(employee_Router, prefix="/employee", tags=["employee"])
+app.include_router(admin_Router, prefix="/admin", tags=["Admin"])
+app.include_router(employee_router, prefix="/", tags=["employee"])
+app.include_router(employee_Router, prefix="/", tags=["employee"])
 app.include_router(product_Router, prefix="/product", tags=["Products"])
 
 @app.get("/")
