@@ -31,3 +31,13 @@ class OrderCreate(BaseModel):
     delivered_status: str = Field(..., pattern="^(Completed|Pending)$", description="Delivery status")
     order_date: date = Field(..., description="Date when the order was placed")
 
+class OrderResponse(BaseModel):
+    order_id: str
+    employee_id: str
+    clinic_hospital_name: str
+    clinic_hospital_address: str
+    items: List[OrderItem]
+    total_amount: float
+    payment_status: str
+    delivered_status: str
+    order_date: date

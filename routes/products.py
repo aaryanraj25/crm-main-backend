@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException,UploadFile, File
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
 from models.products import ProductModel
-from database import  product_collection
-from security import get_current_admin
+from database import  product_collection, get_database
+from security import get_current_admin, get_current_user
 import pandas as pd
 
 import httpx  # type: ignore # To download files from URLs
@@ -146,3 +147,22 @@ async def upload_products_excel(
     return {
         "message": f"{updated_count} products updated, {new_count} new products added"
     }
+    
+@router.get("/products/{organization_id}")
+async def get_products_by_organization(
+    organization_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    current_user: dict = Depends(get_current_user)  # Allow any authenticated user
+):
+    # Validate if user belongs to the requested organization
+    if current_user.get("organization_id") != organization_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Fetch products for the given organization
+    products = await db.products_collection.find({"organization_id": organization_id}).to_list(None)
+
+    if not products:
+        raise HTTPException(status_code=404, detail="No products found for this organization")
+
+    return {"organization_id": organization_id, "products": products}
+    

@@ -15,8 +15,17 @@ class ClinicModel(BaseModel):
     contact_number: str
     email: Optional[EmailStr] = None
     specialization: Optional[str] = None
-    latitude: float  # New field
-    longitude: float  # New field 
+    latitude: float
+    longitude: float
+
+
+class ClientModel(BaseModel):
+    name: str
+    contact_number: str
+    email: Optional[EmailStr] = None
+    clinic_id: str  # 🔗 Link to Clinic ID
+    designation: Optional[str] = None
+    
     
 class VisitUpdateRequest(BaseModel):
     clinic_id: str

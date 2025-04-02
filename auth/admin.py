@@ -36,7 +36,6 @@ async def register_admin(
         raise HTTPException(status_code=400, detail="Admin with this email already exists")
 
     # Create organization entry
-    organization_id = str(ObjectId())  # Generate a unique organization ID
     organization_data = {
         "name": admin.organization,
         "address": admin.address,
@@ -52,12 +51,14 @@ async def register_admin(
     if not organization_result.inserted_id:
         raise HTTPException(status_code=500, detail="Failed to create organization")
 
+    organization_id = organization_result.inserted_id  # ✅ Use actual inserted ObjectId
+
     # Store admin details in `admins_collection`
     admin_data = {
         "email": admin.email,
         "name": admin.name,
         "phone": admin.phone,
-        "organization_id": organization_id,
+        "organization_id": str(organization_id),  # ✅ Convert to string for consistency
         "organization": admin.organization,
         "address": admin.address,
         "emp_count": admin.emp_count,
@@ -77,9 +78,10 @@ async def register_admin(
     return {
         "message": "Registration successful. Your request has been sent for verification.",
         "admin_id": str(admin_result.inserted_id),
-        "organization_id": organization_id,
+        "organization_id": str(organization_id),  # ✅ Ensure it's consistent
         "organization_name": admin.organization
     }
+
 
     
 @router.post("/set-password")
@@ -119,6 +121,6 @@ async def admin_login(email: str, password: str, db=Depends(get_database)):
         raise HTTPException(status_code=401, detail="Invalid password")
 
     token = create_access_token({"admin_id": str(admin["_id"]),  "role": "admin", "organization_id": str(admin["organization_id"]),  
-    "organization_name": admin["organization"], "emp_count": admin["emp_count"]})
+    "organization_name": admin["organization"]})
     
     return {"message": "Login successful", "token": token}    

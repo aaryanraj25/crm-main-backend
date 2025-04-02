@@ -20,6 +20,7 @@ visits_collection = db["visits"]
 orders_collection = db["orders"]
 sales_collection = db["sales"]
 organization_collection = db["organization"]
+client_collection =db["client"]
 
 def get_database():
     return db

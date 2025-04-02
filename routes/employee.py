@@ -1,11 +1,11 @@
 
-from database import get_database, employee_collection, admins_collection, attendance_collection, clinic_collection, visits_collection, orders_collection, product_collection, sales_collection
+from database import get_database, employee_collection, admins_collection, attendance_collection, clinic_collection, visits_collection, orders_collection, client_collection,sales_collection
 from security import get_current_employee
 from bson import ObjectId
 from fastapi import Depends, HTTPException, APIRouter
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from datetime import datetime, timezone
-from models.employee import ClinicModel,  CheckInRequest
+from models.employee import ClinicModel,  CheckInRequest, ClientModel
 from geopy.distance import geodesic  # Correct import
 from typing import Optional
 from models.products import  OrderCreate
@@ -140,8 +140,10 @@ async def clock_out(
 @router.post("/employee/clinics")
 async def add_clinic(
     clinic: ClinicModel,
-    employee: dict = Depends(get_current_employee)
+    employee: dict = Depends(get_current_employee),
+    db=Depends(get_database)
 ):
+    """Add a new clinic and associate it with an employee."""
     employee_id = employee.get("employee_id")
     
     if not employee_id:
@@ -150,13 +152,43 @@ async def add_clinic(
     clinic_data = clinic.model_dump()
     clinic_data["employee_id"] = ObjectId(employee_id)
 
-    # Store in MongoDB
+    # Insert into clinics collection
     inserted_clinic = await clinic_collection.insert_one(clinic_data)
 
     return {
         "message": "Clinic added successfully",
         "clinic_id": str(inserted_clinic.inserted_id)
-    }   
+    }
+@router.post("/employee/clients")
+async def add_client(
+    client: ClientModel,
+    employee: dict = Depends(get_current_employee),
+    db=Depends(get_database)
+):
+    """Add a new client and associate it with a clinic."""
+    employee_id = employee.get("employee_id")
+    
+    if not employee_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Check if the clinic exists
+    clinic = await db.clinics_collection.find_one({"_id": ObjectId(client.clinic_id)})
+    if not clinic:
+        raise HTTPException(status_code=404, detail="Clinic not found")
+
+    client_data = client.model_dump()
+    client_data["employee_id"] = ObjectId(employee_id)
+    client_data["clinic_id"] = ObjectId(client.clinic_id)
+
+    # Insert into clients collection
+    inserted_client = await client_collection.insert_one(client_data)
+
+    return {
+        "message": "Client added successfully",
+        "client_id": str(inserted_client.inserted_id),
+        "clinic_id": client.clinic_id
+    }
+ 
     
 @router.post("/check-in")
 async def check_in(data: CheckInRequest, employee: dict = Depends(get_current_employee)):
@@ -277,65 +309,53 @@ async def add_order(order: OrderCreate, employee: dict = Depends(get_current_emp
 
 
 
-@router.put("/orders/{order_id}/complete")
-async def complete_order(order_id: str, employee: dict = Depends(get_current_employee)):
-    employee_id = employee.get("employee_id")
-    organization_id = employee.get("organization_id")  # Extract organization_id
-    
-    if not employee_id or not organization_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
+@router.get("/employee/profile_sales")
+async def get_employee_profile(
+    current_employee: dict = Depends(get_current_employee),
+    db=Depends(get_database)
+):
+    """Fetch Employee Profile with Sales, Attendance, Orders, Meetings, Clients & Clinics"""
+    if current_employee["role"] != "employee":
+        raise HTTPException(status_code=403, detail="Only employees can access this profile")
 
-    # Find the order
-    order = await orders_collection.find_one({"_id": ObjectId(order_id)})
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+    employee_id = ObjectId(current_employee["user_id"])
 
-    # Fetch employee details
-    employee = await employee_collection.find_one({"_id": ObjectId(employee_id)})
+    # Fetch Employee Details
+    employee = await employee_collection.find_one({"_id": employee_id}, {"password": 0})
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    # Process each item in the order
-    for item in order["items"]:
-        product = await product_collection.find_one({
-            "name": item["name"],
-            "category": item["category"],
-            "manufacturer": item["manufacturer"]
-        })
+    # Fetch Sales Made
+    sales = await sales_collection.find({"employee.id": str(employee_id)}).to_list(None)
 
-        if not product:
-            raise HTTPException(status_code=404, detail=f"Product {item['name']} not found")
+    # Fetch Attendance Records
+    attendance = await attendance_collection.find({"employee_id": employee_id}).to_list(None)
 
-        if product["quantity"] < item["quantity"]:
-            raise HTTPException(status_code=400, detail=f"Insufficient stock for {item['name']}")
+    # Fetch Orders Placed
+    orders = await orders_collection.find({"employee_id": str(employee_id)}).to_list(None)
 
-        # Update product quantity
-        await product_collection.update_one(
-            {"_id": product["_id"]},
-            {"$inc": {"quantity": -item["quantity"]}}
-        )
+    # Fetch Meetings Attended
+    meetings = await visits_collection.find({"employee_id": str(employee_id)}).to_list(None)
 
-    # Update sales record with employee & organization details
-    await sales_collection.insert_one({
-        "order_id": order_id,
-        "total_amount": order["total_amount"],
-        "date": order["order_date"],
-        "organization_id": organization_id,  # Include organization_id
+    # Fetch Clients & Clinics Added
+    clients = await client_collection.find({"added_by": str(employee_id)}).to_list(None)
+
+    # Format Response
+    return {
         "employee": {
             "id": str(employee["_id"]),
             "name": employee["name"],
-            "email": employee["email"]
-        }
-    })
+            "email": employee["email"],
+            "phone": employee["phone"],
+            "organization": employee.get("organization", ""),
+            "admin_id": str(employee.get("admin_id", "")),
+            "is_active": employee.get("is_active", False)
+        },
+        "sales": sales,
+        "attendance": attendance,
+        "orders": orders,
+        "meetings": meetings,
+        "clients": clients
+    }
 
-    # Mark the order as completed & auto-update statuses
-    await orders_collection.update_one(
-        {"_id": ObjectId(order_id)},
-        {"$set": {
-            "status": "Completed",
-            "payment_status": "Completed",
-            "delivered_status": "Completed"
-        }}
-    )
 
-    return {"message": "Order completed successfully"}

@@ -88,3 +88,17 @@ async def send_employee_invitation(to_email: str, name: str, organization: str) 
     {organization} Team
     """
     return await send_email(to_email, subject, content)
+
+async def send_admin_invitation(to_email: str, name: str, organization: str) -> bool:
+    """Send invitation email to new employee"""
+    subject = f"Welcome to {organization}"
+    content = f"""
+    Hello {name},
+
+    You have been added as an admin at {organization}.
+    Please set your password to access the system.
+
+    Regards,
+    {organization} Team
+    """
+    return await send_email(to_email, subject, content)

@@ -12,3 +12,9 @@ class AdminModel(BaseModel):
 class SetPasswordRequest(BaseModel):
     email: EmailStr
     password: str
+    
+class AdminCreateModel(BaseModel):
+    email: EmailStr
+    name: str
+    phone: str
+   
