@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from motor.motor_asyncio import AsyncIOMotorDatabase
-
-from database import get_database, employee_collection, admins_collection, sales_collection, visits_collection, product_collection
+from typing import List, Optional
+from database import get_database, employee_collection, admins_collection, sales_collection, visits_collection, product_collection, organization_collection, orders_collection, attendance_collection
 from security import get_current_admin
 from datetime import datetime, timezone
 from bson import ObjectId
