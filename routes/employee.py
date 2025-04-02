@@ -23,7 +23,7 @@ def convert_objectid_to_str(document):
                 document[key] = [str(v) if isinstance(v, ObjectId) else v for v in value]
     return document
 
-@router.get("/employee/profile")
+@router.get("/profile")
 async def get_employee_profile(
     employee: dict = Depends(get_current_employee),
     db: AsyncIOMotorDatabase = Depends(get_database)
@@ -54,7 +54,7 @@ async def get_employee_profile(
         "admin_profile": admin_data
     }
 
-@router.post("/employee/clock-in")
+@router.post("/clock-in")
 async def clock_in(
     work_from_home: bool = False,  # Default to False if not provided
     employee: dict = Depends(get_current_employee)
@@ -96,7 +96,7 @@ async def clock_in(
     }    
     
     
-@router.post("/employee/clock-out")
+@router.post("/clock-out")
 async def clock_out(
     employee: dict = Depends(get_current_employee)
 ):
@@ -135,9 +135,35 @@ async def clock_out(
         "message": "Clock-out successful",
         "clock_out_time": clock_out_time
     }
+
+@router.post("/location")
+async def post_employee_location(
+    latitude: float,
+    longitude: float,
+    employee: dict = Depends(get_current_employee),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Allows an employee to post their current location (latitude and longitude).
+    """
+    employee_id = employee.get("employee_id")
+
+    if not employee_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Update the employee's location in the database
+    await employee_collection.update_one(
+        {"_id": ObjectId(employee_id)},
+        {"$set": {"location": {"latitude": latitude, "longitude": longitude, "updated_at": datetime.now(timezone.utc)}}}
+    )
+
+    return {
+        "message": "Location updated successfully",
+        "location": {"latitude": latitude, "longitude": longitude}
+    }
     
     
-@router.post("/employee/clinics")
+@router.post("/clinics")
 async def add_clinic(
     clinic: ClinicModel,
     employee: dict = Depends(get_current_employee),
@@ -280,6 +306,60 @@ async def update_meeting(visit_id: str, outcome: str, notes: Optional[str] = Non
         raise HTTPException(status_code=404, detail="Visit not found or no updates made")
 
     return {"message": "Meeting details updated successfully"}
+
+@router.get("/stats")
+async def get_employee_stats(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    employee: dict = Depends(get_current_employee)
+):
+    """
+    Fetch total sales, total visits, and performance metrics for the logged-in employee.
+    """
+    employee_id = employee.get("employee_id")
+    organization_id = employee.get("organization_id")
+
+    if not employee_id or not organization_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Fetch total sales for the employee
+    total_sales = await sales_collection.aggregate([
+        {"$match": {"employee.id": employee_id}},
+        {"$group": {"_id": None, "totalSales": {"$sum": "$total_amount"}}}
+    ]).to_list(length=1)
+
+    # Fetch total visits for the employee
+    total_visits = await visits_collection.count_documents({"employee_id": ObjectId(employee_id)})
+
+    # Fetch all employees' sales in the organization to calculate rank
+    all_employees_sales = await sales_collection.aggregate([
+        {"$match": {"organization_id": organization_id}},
+        {
+            "$group": {
+                "_id": "$employee.id",
+                "salesAchieved": {"$sum": "$total_amount"}
+            }
+        },
+        {"$sort": {"salesAchieved": -1}}
+    ]).to_list(length=None)
+
+    # Calculate rank for the employee
+    rank = next(
+        (index + 1 for index, emp in enumerate(all_employees_sales) if emp["_id"] == employee_id),
+        None
+    )
+
+    # Fetch the number of unique clients handled by the employee
+    clients_count = await sales_collection.distinct("client_id", {"employee.id": employee_id})
+
+    return {
+        "totalSales": total_sales[0]["totalSales"] if total_sales else 0,
+        "totalVisits": total_visits,
+        "performance": {
+            "salesAchieved": total_sales[0]["totalSales"] if total_sales else 0,
+            "rank": rank,
+            "clientsCount": len(clients_count)
+        }
+    }
 
 @router.post("/orders/add", status_code=201)
 async def add_order(order: OrderCreate, employee: dict = Depends(get_current_employee)):
