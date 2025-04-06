@@ -5,7 +5,7 @@ from bson import ObjectId
 from fastapi import Depends, HTTPException, APIRouter
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from datetime import datetime, timezone
-from models.employee import ClinicModel,  CheckInRequest, ClientModel
+from models.employee import ClinicModel,  CheckInRequest, ClientModel, WFHRequestStatus, WFHRequest, MeetingPerson, CheckOutRequest, Location
 from geopy.distance import geodesic  # Correct import
 from typing import Optional
 from models.products import  OrderCreate
@@ -216,71 +216,147 @@ async def add_client(
     }
  
     
-@router.post("/check-in")
-async def check_in(data: CheckInRequest, employee: dict = Depends(get_current_employee)):
-    
+@router.post("/wfh-request")
+async def request_wfh(
+    request: WFHRequest,
+    employee: dict = Depends(get_current_employee)
+):
+    """Submit a WFH request"""
     employee_id = employee.get("employee_id")
-    
+
     if not employee_id:
         raise HTTPException(status_code=401, detail="Invalid token")
-    """Allows an employee to check in only if within 100 meters of the clinic."""
 
-    # Fetch clinic details
-    clinic = await clinic_collection.find_one({"_id": ObjectId(data.clinic_id)})
-    
-    if not clinic:
-        raise HTTPException(status_code=404, detail="Clinic not found")
+    wfh_request = {
+        "employee_id": ObjectId(employee_id),
+        "date": request.date,
+        "reason": request.reason,
+        "status": request.status,
+        "created_at": datetime.now(timezone.utc)
+    }
 
-    # Extract coordinates
-    clinic_coords = (clinic["latitude"], clinic["longitude"])
-    employee_coords = (data.latitude, data.longitude)
+    result = await db.wfh_requests.insert_one(wfh_request)
 
-    # Calculate distance in meters
-    distance = geodesic(clinic_coords, employee_coords).meters
+    return {
+        "message": "WFH request submitted successfully",
+        "request_id": str(result.inserted_id)
+    }
 
-    if distance > 100:
-        raise HTTPException(status_code=403, detail=f"You must be within 100m to check in. Current distance: {distance:.2f}m")
+@router.post("/check-in")
+async def check_in(
+    request: CheckInRequest,
+    employee: dict = Depends(get_current_employee)
+):
+    """Check in at a hospital with location tracking"""
+    employee_id = employee.get("employee_id")
 
+    if not employee_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Verify hospital exists
+    hospital = await clinic_collection.find_one({"_id": ObjectId(request.hospital_id)})
+    if not hospital:
+        raise HTTPException(status_code=404, detail="Hospital not found")
+
+    # Create visit record with initial location
     visit = {
-        "employee_id": ObjectId(data.employee_id),
-        "clinic_id": ObjectId(data.clinic_id),
+        "employee_id": ObjectId(employee_id),
+        "hospital_id": ObjectId(request.hospital_id),
         "check_in_time": datetime.now(timezone.utc),
-        "check_out_time": None,
-        "time_spent_minutes": None,
-        "meeting_outcome": None,
-        "notes": None,
-        "follow_up_date": None
+        "locations": [{
+            "latitude": request.latitude,
+            "longitude": request.longitude,
+            "timestamp": datetime.now(timezone.utc)
+        }]
     }
 
     result = await visits_collection.insert_one(visit)
-    return {"message": "Check-in successful", "visit_id": str(result.inserted_id)}
 
-@router.post("/check-out")
-async def check_out(visit_id: str, employee: dict = Depends(get_current_employee)):
+    return {
+        "message": "Check-in successful",
+        "visit_id": str(result.inserted_id)
+    }
+
+@router.post("/update-location")
+async def update_location(
+    location: Location,
+    employee: dict = Depends(get_current_employee)
+):
+    """Update employee location during active visit"""
     employee_id = employee.get("employee_id")
-    
+
     if not employee_id:
         raise HTTPException(status_code=401, detail="Invalid token")
-    """Marks check-out and calculates time spent at the clinic."""
-    visit = await visits_collection.find_one({"_id": ObjectId(visit_id)})
+
+    # Find active visit
+    active_visit = await visits_collection.find_one({
+        "employee_id": ObjectId(employee_id),
+        "check_out_time": {"$exists": False}
+    })
+
+    if not active_visit:
+        raise HTTPException(status_code=400, detail="No active visit found")
+
+    # Add location to visit tracking
+    await visits_collection.update_one(
+        {"_id": active_visit["_id"]},
+        {"$push": {"locations": {
+            "latitude": location.latitude,
+            "longitude": location.longitude,
+            "timestamp": location.timestamp
+        }}}
+    )
+
+    return {"message": "Location updated successfully"}
+
+@router.post("/check-out/{visit_id}")
+async def check_out(
+    visit_id: str,
+    request: CheckOutRequest,
+    employee: dict = Depends(get_current_employee)
+):
+    """Check out from visit with meeting person details"""
+    employee_id = employee.get("employee_id")
+
+    if not employee_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Find and update visit
+    visit = await visits_collection.find_one({
+        "_id": ObjectId(visit_id),
+        "employee_id": ObjectId(employee_id)
+    })
 
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
 
-    if visit.get("check_out_time"):
+    if "check_out_time" in visit:
         raise HTTPException(status_code=400, detail="Already checked out")
 
-    check_out_time = datetime.now(timezone.utc)
-    visit["check_in_time"] = visit["check_in_time"].replace(tzinfo=timezone.utc)
+    # Calculate total distance
+    locations = visit.get("locations", [])
+    total_distance = 0
 
-    time_spent = (check_out_time - visit["check_in_time"]).total_seconds() // 60  # Minutes
+    for i in range(len(locations) - 1):
+        point1 = (locations[i]["latitude"], locations[i]["longitude"])
+        point2 = (locations[i + 1]["latitude"], locations[i + 1]["longitude"])
+        total_distance += geodesic(point1, point2).kilometers
 
+    # Update visit with checkout details
     await visits_collection.update_one(
         {"_id": ObjectId(visit_id)},
-        {"$set": {"check_out_time": check_out_time, "time_spent_minutes": time_spent}}
+        {"$set": {
+            "check_out_time": datetime.now(timezone.utc),
+            "meeting_person": request.meeting_person.dict(),
+            "notes": request.notes,
+            "total_distance": total_distance
+        }}
     )
 
-    return {"message": "Check-out successful", "time_spent": time_spent}
+    return {
+        "message": "Check-out successful",
+        "total_distance": total_distance
+    }
 
 @router.post("/update-meeting")
 async def update_meeting(visit_id: str, outcome: str, notes: Optional[str] = None, follow_up_date: Optional[datetime] = None,employee: dict = Depends(get_current_employee)):

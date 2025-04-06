@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from services.email_service import send_employee_invitation, send_admin_invitation
 from models.products import OrderResponse
+from models.employee import WFHRequestStatus
 
 
 
@@ -716,3 +717,100 @@ async def get_employee_report(
             for att in attendance_records
         ]
     }
+
+@router.get("/wfh-requests")
+async def get_wfh_requests(
+    status: Optional[WFHRequestStatus] = None,
+    admin: dict = Depends(get_current_admin)
+):
+    """Get all WFH requests for admin's organization"""
+    organization_id = admin.get("organization_id")
+
+    if not organization_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Build query
+    query = {"organization_id": organization_id}
+    if status:
+        query["status"] = status
+
+    # Fetch requests with employee details
+    pipeline = [
+        {"$match": query},
+        {"$lookup": {
+            "from": "employees",
+            "localField": "employee_id",
+            "foreignField": "_id",
+            "as": "employee"
+        }},
+        {"$unwind": "$employee"}
+    ]
+
+    requests = await db.wfh_requests.aggregate(pipeline).to_list(None)
+    return {"requests": requests}
+
+@router.put("/wfh-requests/{request_id}")
+async def update_wfh_request(
+    request_id: str,
+    status: WFHRequestStatus,
+    admin: dict = Depends(get_current_admin)
+):
+    """Update WFH request status"""
+    organization_id = admin.get("organization_id")
+
+    if not organization_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    result = await db.wfh_requests.update_one(
+        {"_id": ObjectId(request_id)},
+        {"$set": {"status": status}}
+    )
+
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    return {"message": f"Request {status}"}
+
+@router.get("/employee-tracking")
+async def get_employee_tracking(
+    date: Optional[str] = None,
+    employee_id: Optional[str] = None,
+    admin: dict = Depends(get_current_admin)
+):
+    """Get employee movement tracking data"""
+    organization_id = admin.get("organization_id")
+
+    if not organization_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Build query
+    query = {"organization_id": organization_id}
+    if date:
+        query["date"] = datetime.strptime(date, "%Y-%m-%d")
+    if employee_id:
+        query["employee_id"] = ObjectId(employee_id)
+
+    # Fetch visits with location tracking
+    visits = await visits_collection.find(query).to_list(None)
+
+    tracking_data = []
+    for visit in visits:
+        total_distance = 0
+        locations = visit.get("locations", [])
+
+        for i in range(len(locations) - 1):
+            point1 = (locations[i]["latitude"], locations[i]["longitude"])
+            point2 = (locations[i + 1]["latitude"], locations[i + 1]["longitude"])
+            total_distance += geodesic(point1, point2).kilometers
+
+        tracking_data.append({
+            "visit_id": str(visit["_id"]),
+            "employee_id": str(visit["employee_id"]),
+            "hospital_id": str(visit["hospital_id"]),
+            "check_in_time": visit["check_in_time"],
+            "check_out_time": visit.get("check_out_time"),
+            "total_distance": total_distance,
+            "locations": locations
+        })
+
+    return {"tracking_data": tracking_data}
