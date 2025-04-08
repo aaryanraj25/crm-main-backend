@@ -390,7 +390,7 @@ async def add_order(order: OrderCreate, employee: dict = Depends(get_current_emp
 
 
 @router.get("/employee/profile_sales")
-async def get_employee_profile(
+async def get_one_employee_profile(
     current_employee: dict = Depends(get_current_employee),
     db=Depends(get_database)
 ):
