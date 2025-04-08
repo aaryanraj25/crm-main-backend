@@ -7,7 +7,7 @@ from dependencies import verify_password, hash_password, create_access_token
 from bson import ObjectId
 from datetime import datetime, timezone
 from services.email_service import send_verification_email
-
+from utils import generate_random_id, generate_admin_id, generate_organization_id
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -30,35 +30,33 @@ async def register_admin(
     admin: AdminModel,
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    # Check if an admin with the same email exists
     existing_admin = await admins_collection.find_one({"email": admin.email})
     if existing_admin:
         raise HTTPException(status_code=400, detail="Admin with this email already exists")
 
-    # Create organization entry
+    # Generate custom string ID
+    organization_id = generate_organization_id()
+
     organization_data = {
+        "_id": organization_id,  # 👈 Set custom string ID here
         "name": admin.organization,
         "address": admin.address,
         "contact_person": admin.name,
         "contact_email": admin.email,
         "contact_number": admin.phone,
-        "total_employees": admin.emp_count  # Initial employee count
+        "total_employees": admin.emp_count
     }
 
-    # Insert organization into the database
-    organization_result = await organization_collection.insert_one(organization_data)
+    await organization_collection.insert_one(organization_data)
 
-    if not organization_result.inserted_id:
-        raise HTTPException(status_code=500, detail="Failed to create organization")
+    admin_id = generate_admin_id()
 
-    organization_id = organization_result.inserted_id  # ✅ Use actual inserted ObjectId
-
-    # Store admin details in `admins_collection`
     admin_data = {
+        "_id": admin_id,  # 👈 Custom string ID for admin
         "email": admin.email,
         "name": admin.name,
         "phone": admin.phone,
-        "organization_id": str(organization_id),  # ✅ Convert to string for consistency
+        "organization_id": organization_id,
         "organization": admin.organization,
         "address": admin.address,
         "emp_count": admin.emp_count,
@@ -67,21 +65,16 @@ async def register_admin(
         "created_at": datetime.now(timezone.utc)
     }
 
-    admin_result = await admins_collection.insert_one(admin_data)
+    await admins_collection.insert_one(admin_data)
 
-    if not admin_result.inserted_id:
-        raise HTTPException(status_code=500, detail="Failed to create admin")
-
-    # Send verification email
     await send_verification_email(admin.email, admin.name)
 
     return {
         "message": "Registration successful. Your request has been sent for verification.",
-        "admin_id": str(admin_result.inserted_id),
-        "organization_id": str(organization_id),  # ✅ Ensure it's consistent
+        "admin_id": admin_id,
+        "organization_id": organization_id,
         "organization_name": admin.organization
     }
-
 
     
 @router.post("/set-password")
@@ -112,25 +105,29 @@ async def admin_login(email: str, password: str, db=Depends(get_database)):
     admins_collection = db["admin"]
     organizations_collection = db["organization"]
 
-    # Find admin
+    # Find admin by email
     admin = await admins_collection.find_one({"email": email})
     if not admin:
         raise HTTPException(status_code=404, detail="Admin not found")
 
+    # Check if admin is verified
     if not admin.get("is_verified", False):
         raise HTTPException(status_code=403, detail="Admin is not verified yet")
 
+    # Validate password
     if not verify_password(password, admin.get("password")):
         raise HTTPException(status_code=401, detail="Invalid password")
 
-    # Get organization details
+    # Fetch organization using string-based ID
     organization = await organizations_collection.find_one(
-        {"_id": ObjectId(admin["organization_id"])}
+        {"organization_id": admin["organization_id"]}
     )
+    if not organization:
+        raise HTTPException(status_code=404, detail="Organization not found")
 
-    # Prepare admin details (excluding sensitive information)
+    # Prepare admin details
     admin_details = {
-        "id": str(admin["_id"]),
+        "id": admin.get("admin_id"),  # Assuming you store admin_id during registration
         "name": admin.get("name", ""),
         "email": admin["email"],
         "role": "admin",
@@ -138,21 +135,21 @@ async def admin_login(email: str, password: str, db=Depends(get_database)):
 
     # Prepare organization details
     organization_details = {
-        "id": str(organization["_id"]),
-        "name": organization["name"],
+        "id": organization.get("organization_id"),
+        "name": organization.get("name"),
     }
 
-    # Create token
+    # Generate access token
     token = create_access_token({
-        "admin_id": str(admin["_id"]),
+        "admin_id": admin.get("admin_id"),
         "role": "admin",
-        "organization_id": str(admin["organization_id"]),
-        "organization_name": admin["organization"]
+        "organization_id": admin.get("organization_id"),
+        "organization_name": admin.get("organization")
     })
 
-    # Update last login
+    # Update last login time
     await admins_collection.update_one(
-        {"_id": admin["_id"]},
+        {"email": email},
         {"$set": {"last_login": datetime.utcnow()}}
     )
 

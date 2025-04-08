@@ -1,11 +1,11 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter,  Depends
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime, timezone
 from geopy.distance import geodesic
 from bson import ObjectId
 
-from database import get_database, clinic_collection
+from database import get_database, clinic_collection, attendance_collection
 from models.hospitals import HospitalCreate, HospitalResponse, HospitalList
 from security import get_current_admin, get_current_employee
 

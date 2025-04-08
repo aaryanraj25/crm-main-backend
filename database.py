@@ -21,6 +21,7 @@ orders_collection = db["orders"]
 sales_collection = db["sales"]
 organization_collection = db["organization"]
 client_collection =db["client"]
+wfh_request = db["wfh_request"]
 
 def get_database():
     return db

@@ -235,7 +235,7 @@ async def request_wfh(
         "created_at": datetime.now(timezone.utc)
     }
 
-    result = await db.wfh_requests.insert_one(wfh_request)
+    result = await wfh_request.insert_one(wfh_request)
 
     return {
         "message": "WFH request submitted successfully",
