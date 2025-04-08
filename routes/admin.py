@@ -451,16 +451,24 @@ async def create_admin(
 async def get_products_by_organization(
     organization_id: str,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    current_admin: dict = Depends(get_current_admin)  # Ensure only Admins can fetch products
+    current_admin: dict = Depends(get_current_admin)
 ):
+    # Convert the string to ObjectId
+    organization_object_id = ObjectId(organization_id)
+    
     # Fetch products for the given organization
-    products = await db.products_collection.find({"organization_id": organization_id}).to_list(None)
+    products_cursor = product_collection.find({"organization_id": organization_object_id})
+    
+    # Convert cursor to list and handle ObjectId serialization
+    products = []
+    async for product in products_cursor:
+        products.append(convert_objectid_to_str(product))
 
     if not products:
         raise HTTPException(status_code=404, detail="No products found for this organization")
 
-    return {"organization_id": organization_id, "products": products} 
-
+    return {"organization_id": organization_id, "products": products}
+    
 @router.get("/get_orders", response_model=List[OrderResponse])
 async def get_orders_by_admin(db: AsyncIOMotorDatabase = Depends(get_database), current_admin: dict = Depends(get_current_admin)):
     # Extract organization_id from the current admin's details

@@ -154,12 +154,21 @@ async def get_products_by_organization(
     db: AsyncIOMotorDatabase = Depends(get_database),
     current_user: dict = Depends(get_current_user)  # Allow any authenticated user
 ):
+    # Convert string to ObjectId for comparison
+    org_id_obj = ObjectId(organization_id)
+    
     # Validate if user belongs to the requested organization
-    if current_user.get("organization_id") != organization_id:
+    user_org_id = current_user.get("organization_id")
+    if user_org_id != organization_id and str(user_org_id) != organization_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Fetch products for the given organization
-    products = await db.products_collection.find({"organization_id": organization_id}).to_list(None)
+    products_cursor = product_collection.find({"organization_id": org_id_obj})
+    
+    # Convert cursor to list and handle ObjectId serialization
+    products = []
+    async for product in products_cursor:
+        products.append(convert_objectid_to_str(product))
 
     if not products:
         raise HTTPException(status_code=404, detail="No products found for this organization")
