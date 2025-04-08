@@ -106,10 +106,13 @@ async def set_admin_password(
 
     return {"message": "Password has been set successfully. You can now log in."}
 
+
 @router.post("/admin-login")
 async def admin_login(email: str, password: str, db=Depends(get_database)):
     admins_collection = db["admin"]
+    organizations_collection = db["organization"]
 
+    # Find admin
     admin = await admins_collection.find_one({"email": email})
     if not admin:
         raise HTTPException(status_code=404, detail="Admin not found")
@@ -120,7 +123,43 @@ async def admin_login(email: str, password: str, db=Depends(get_database)):
     if not verify_password(password, admin.get("password")):
         raise HTTPException(status_code=401, detail="Invalid password")
 
-    token = create_access_token({"admin_id": str(admin["_id"]),  "role": "admin", "organization_id": str(admin["organization_id"]),  
-    "organization_name": admin["organization"]})
-    
-    return {"message": "Login successful", "token": token}    
+    # Get organization details
+    organization = await organizations_collection.find_one(
+        {"_id": ObjectId(admin["organization_id"])}
+    )
+
+    # Prepare admin details (excluding sensitive information)
+    admin_details = {
+        "id": str(admin["_id"]),
+        "name": admin.get("name", ""),
+        "email": admin["email"],
+        "role": "admin",
+    }
+
+    # Prepare organization details
+    organization_details = {
+        "id": str(organization["_id"]),
+        "name": organization["name"],
+    }
+
+    # Create token
+    token = create_access_token({
+        "admin_id": str(admin["_id"]),
+        "role": "admin",
+        "organization_id": str(admin["organization_id"]),
+        "organization_name": admin["organization"]
+    })
+
+    # Update last login
+    await admins_collection.update_one(
+        {"_id": admin["_id"]},
+        {"$set": {"last_login": datetime.utcnow()}}
+    )
+
+    return {
+        "success": True,
+        "message": "Login successful",
+        "token": token,
+        "user": admin_details,
+        "organization": organization_details
+    }

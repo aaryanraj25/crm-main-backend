@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime
+from enum import Enum
 
 class EmployeeCreateRequest(BaseModel):
     name: str
@@ -49,4 +50,28 @@ class CheckInRequest(BaseModel):
     employee_id: str
     clinic_id: str
     latitude: float
-    longitude: float       
+    longitude: float    
+
+class WFHRequestStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+class WFHRequest(BaseModel):
+    date: datetime
+    reason: str
+    status: WFHRequestStatus = WFHRequestStatus.PENDING
+
+class MeetingPerson(BaseModel):
+    name: str
+    designation: str
+    contact: Optional[str]
+
+class CheckOutRequest(BaseModel):
+    meeting_person: MeetingPerson
+    notes: Optional[str]
+
+class Location(BaseModel):
+    latitude: float
+    longitude: float
+    timestamp: datetime   
