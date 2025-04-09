@@ -29,23 +29,27 @@ async def set_employee_password(
 async def employee_login(
     email: EmailStr,
     password: str,
-    db:AsyncIOMotorDatabase = Depends(get_database)
+    db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    
-    employee = await employee_collection.find_one({"email":email})
-    
+    employee = await employee_collection.find_one({"email": email})
+
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
-    
+
     if not verify_password(password, employee.get("password")):
         raise HTTPException(status_code=401, detail="Invalid password")
-    
-    token = create_access_token({
-    "employee_id": str(employee["_id"]),
-    "role": "employee",
-    "organization": str(employee.get("organization", "")),  # ✅ Organization Name (if available)
-    "organization_id": str(employee.get("organization_id", "")),  # ✅ Organization ID
-    "admin_id": str(employee.get("admin_id", ""))
-})
-    
-    return {"message": "Login successful", "token": token}
+
+    token_data = {
+        "employee_id": employee.get("employee_id"),  # ✅ custom alphanumeric ID
+        "role": "employee",
+        "organization": employee.get("organization", ""),
+        "organization_id": employee.get("organization_id", ""),
+        "admin_id": employee.get("admin_id", "")
+    }
+
+    token = create_access_token(token_data)
+
+    return {
+        "message": "Login successful",
+        "token": token
+    }
