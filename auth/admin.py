@@ -119,7 +119,7 @@ async def admin_login(email: str, password: str, db=Depends(get_database)):
         raise HTTPException(status_code=401, detail="Invalid password")
 
     # Fetch organization using string-based ID
-    organization = await organizations_collection.find_one(
+    organization = await organization_collection.find_one(
         {"organization_id": admin["organization_id"]}
     )
     if not organization:

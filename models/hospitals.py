@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -40,11 +40,6 @@ class HospitalResponse(HospitalCreate):
     distance: Optional[float] = None
     within_range: Optional[bool] = None
     source: str = "database"
-
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
 
 class HospitalList(BaseModel):
     total_hospitals: int

@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import get_database, admins_collection
-from bson import ObjectId
 from security import get_current_superadmin
 from services.email_service import send_approval_email
 
@@ -44,21 +43,24 @@ async def verify_admin(
     db: AsyncIOMotorDatabase = Depends(get_database),
     superadmin: dict = Depends(get_current_superadmin)
 ):
-    try:
-        object_id = ObjectId(admin_id)
-    except:
-        raise HTTPException(status_code=400, detail="Invalid Admin ID format")
+    admins_collection = db.get_collection("admin")
 
-    admin = await admins_collection.find_one({"_id": object_id})
+    # No ObjectId conversion
+    admin = await admins_collection.find_one({"_id": admin_id})
     if not admin:
         raise HTTPException(status_code=404, detail="Admin not found")
 
     if admin.get("is_verified"):
         raise HTTPException(status_code=400, detail="Admin is already verified")
 
-    await admins_collection.update_one({"_id": object_id}, {"$set": {"is_verified": True}})
+    await admins_collection.update_one({"_id": admin_id}, {"$set": {"is_verified": True}})
 
     # Send approval email
-    await send_approval_email(admin["email"], admin["name"])
+    email = admin.get("email")
+    name = admin.get("name", "Admin")
+    if not email:
+        raise HTTPException(status_code=400, detail="Admin email not found")
+
+    await send_approval_email(email, name)
 
     return {"message": "Admin verified successfully"}

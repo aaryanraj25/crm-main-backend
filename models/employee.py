@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from datetime import datetime
 from enum import Enum
@@ -6,7 +6,7 @@ from enum import Enum
 class EmployeeCreateRequest(BaseModel):
     name: str
     email: EmailStr
-    
+
 class ClinicModel(BaseModel):
     name: str
     address: str
@@ -19,38 +19,12 @@ class ClinicModel(BaseModel):
     latitude: float
     longitude: float
 
-
 class ClientModel(BaseModel):
     name: str
     contact_number: str
     email: Optional[EmailStr] = None
-    clinic_id: str  # 🔗 Link to Clinic ID
+    clinic_id: str
     designation: Optional[str] = None
-    
-    
-class VisitUpdateRequest(BaseModel):
-    clinic_id: str
-    latitude: float
-    longitude: float
-    meeting_outcome: str  # e.g., "Interested", "Not Interested", "Follow-up Required"
-    notes: Optional[str] = None
-    follow_up_date: Optional[datetime] = None   
-    
-class VisitModel(BaseModel):
-    employee_id: str
-    clinic_id: str
-    check_in_time: datetime = None
-    check_out_time: datetime = None
-    time_spent_minutes: int = None
-    meeting_outcome: str = None  # "Interested", "Not Interested", "Follow-up Required"
-    notes: str = None
-    follow_up_date: datetime = None   
-    
-class CheckInRequest(BaseModel):
-    employee_id: str
-    clinic_id: str
-    latitude: float
-    longitude: float    
 
 class WFHRequestStatus(str, Enum):
     PENDING = "pending"
@@ -67,6 +41,11 @@ class MeetingPerson(BaseModel):
     designation: str
     contact: Optional[str]
 
+class CheckInRequest(BaseModel):
+    clinic_id: str
+    latitude: float
+    longitude: float
+
 class CheckOutRequest(BaseModel):
     meeting_person: MeetingPerson
     notes: Optional[str]
@@ -74,4 +53,4 @@ class CheckOutRequest(BaseModel):
 class Location(BaseModel):
     latitude: float
     longitude: float
-    timestamp: datetime   
+    timestamp: datetime

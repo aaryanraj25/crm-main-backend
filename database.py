@@ -8,6 +8,7 @@ DATABASE_NAME = os.getenv("DATABASE_NAME", "crm_db")
 client = AsyncIOMotorClient(MONGO_URI)
 db = client[DATABASE_NAME]
 
+# Collections using string-based IDs
 users_collection = db["users"]
 tasks_collection = db["tasks"]
 logs_collection = db["logs"]
@@ -20,7 +21,7 @@ visits_collection = db["visits"]
 orders_collection = db["orders"]
 sales_collection = db["sales"]
 organization_collection = db["organization"]
-client_collection =db["client"]
+client_collection = db["client"]
 wfh_request = db["wfh_request"]
 
 def get_database():
