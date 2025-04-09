@@ -432,8 +432,8 @@ async def get_products_by_organization(
     if not products:
         raise HTTPException(status_code=404, detail="No products found for this organization")
 
-    return {"organization_id": organization_id, "products": products} 
-
+    return {"organization_id": organization_id, "products": products}
+    
 @router.get("/get_orders", response_model=List[OrderResponse])
 async def get_orders_by_admin(db: AsyncIOMotorDatabase = Depends(get_database), current_admin: dict = Depends(get_current_admin)):
     organization_id = current_admin["organization_id"]
