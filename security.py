@@ -11,7 +11,7 @@ security = HTTPBearer()
 # Environment variables
 SECRET_KEY = os.getenv("SECRET_KEY", "y0f9ec959fc1a0bdadeb3546f9e634dda5914847dfddfee954688b9352f3c5f0e")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 525600
 
 def create_access_token(data: dict):
     """Create a new access token"""
@@ -64,7 +64,7 @@ def get_current_admin(
                 detail="Not authorized as Admin"
             )
         
-        required_fields = ["admin_id", "organization_id", "email"]
+        required_fields = ["admin_id", "organization_id"]
         for field in required_fields:
             if not payload.get(field):
                 raise HTTPException(
@@ -95,7 +95,7 @@ def get_current_employee(
                 detail="Not authorized as Employee"
             )
             
-        required_fields = ["employee_id", "organization_id", "email"]
+        required_fields = ["employee_id", "organization_id"]
         for field in required_fields:
             if not payload.get(field):
                 raise HTTPException(

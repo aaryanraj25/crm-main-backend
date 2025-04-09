@@ -20,66 +20,53 @@ from geopy.distance import geodesic
 
 router = APIRouter()
 
+# routes/admin.py
 @router.post("/create-employee")
 async def create_employee(
     email: str,
     name: str,
     db: AsyncIOMotorDatabase = Depends(get_database),
-    admin: dict = Depends(get_current_admin)
+    current_admin: dict = Depends(get_current_admin)
 ):
-    admin_id = admin["admin_id"]
-    admin_data = await admins_collection.find_one({"_id": admin_id})
+    try:
+        # Get admin details from token
+        admin_id = current_admin["admin_id"]
+        organization_id = current_admin["organization_id"]
+        organization = current_admin["organization_name"]
 
-    if not admin_data:
-        raise HTTPException(status_code=404, detail="Admin not found")
+        # Check if employee exists
+        existing_employee = await employee_collection.find_one({"email": email})
+        if existing_employee:
+            raise HTTPException(status_code=400, detail="Employee already exists")
 
-    org_id = admin_data.get("organization_id")
-    if not org_id:
-        raise HTTPException(status_code=400, detail="Organization ID missing")
+        # Create employee
+        employee_id = generate_employee_id()
+        employee_data = {
+            "_id": employee_id,
+            "email": email,
+            "name": name,
+            "organization_id": organization_id,
+            "organization": organization,
+            "admin_id": admin_id,
+            "created_at": get_current_datetime(),
+            "role": "employee"
+        }
 
-    organization_data = await organization_collection.find_one({"_id": org_id})
-    if not organization_data:
-        raise HTTPException(status_code=404, detail="Organization not found")
+        await employee_collection.insert_one(employee_data)
 
-    org_name = organization_data.get("name")
-    emp_limit = organization_data.get("emp_count", 0)
+        # Send invitation email
+        try:
+            await send_employee_invitation(email, name, organization)
+        except Exception as e:
+            print(f"Email error: {e}")
 
-    current_emp_count = await employee_collection.count_documents({"organization_id": org_id})
-    if current_emp_count >= emp_limit:
-        raise HTTPException(status_code=403, detail=f"Employee limit reached ({emp_limit})")
+        return {
+            "message": "Employee created successfully",
+            "employee_id": employee_id
+        }
 
-    existing_employee = await employee_collection.find_one({"email": email})
-    if existing_employee:
-        raise HTTPException(status_code=400, detail="Employee already exists")
-
-    employee_id = generate_employee_id()
-
-    employee_data = {
-        "_id": employee_id,
-        "email": email,
-        "name": name,
-        "organization_id": org_id,
-        "organization": org_name,
-        "created_at": get_current_datetime(),
-        "admin_id": admin_id,
-        "role": "employee"
-    }
-
-    await employee_collection.insert_one(employee_data)
-    await organization_collection.update_one(
-        {"_id": org_id},
-        {"$inc": {"total_employees": 1}}
-    )
-
-    await send_employee_invitation(email, name, org_name)
-
-    return {
-        "message": "Employee created successfully",
-        "employee_id": employee_id,
-        "organization_id": org_id,
-        "organization_name": org_name,
-        "created_at": employee_data["created_at"]
-    }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/employee-location/{employee_id}")
 async def get_employee_location(
@@ -126,7 +113,7 @@ async def get_organization_stats(
 
     total_sales = await sales_collection.aggregate([
         {"$match": {"organization_id": org_id}},
-        {"$group": {"_id": None, "totalSales": {"$sum": "$amount"}}}
+        {"$group": {"_id": None, "totalSales": {"$sum": "$total_amount"}}}  # Changed from $amount to $total_amount
     ]).to_list(length=1)
 
     total_visits = await visits_collection.count_documents({"organization_id": org_id})
@@ -204,7 +191,7 @@ async def get_top_employees(
             "$project": {
                 "employeeId": "$_id",
                 "name": 1,
-                "salesAmount": {"$sum": "$sales_data.amount"}
+                "salesAmount": {"$sum": "$sales_data.total_amount"}  # Changed from amount to total_amount
             }
         },
         {"$sort": {"salesAmount": -1}},
@@ -255,17 +242,40 @@ async def get_sales_trends(
     if not org_id:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    yearly_sales = await sales_collection.aggregate([
+    # Daily sales (past 30 days)
+    daily_sales = await sales_collection.aggregate([
         {"$match": {"organization_id": org_id}},
         {
             "$group": {
-                "_id": {"year": {"$year": "$date"}},
-                "amount": {"$sum": "$amount"}
+                "_id": {
+                    "year": {"$year": "$date"},
+                    "month": {"$month": "$date"},
+                    "day": {"$dayOfMonth": "$date"}
+                },
+                "amount": {"$sum": "$total_amount"}
             }
         },
-        {"$sort": {"_id.year": -1}}
+        {"$sort": {"_id.year": -1, "_id.month": -1, "_id.day": -1}},
+        {"$limit": 30}
     ]).to_list(length=None)
 
+    # Weekly sales (past 12 weeks)
+    weekly_sales = await sales_collection.aggregate([
+        {"$match": {"organization_id": org_id}},
+        {
+            "$group": {
+                "_id": {
+                    "year": {"$year": "$date"},
+                    "week": {"$week": "$date"}
+                },
+                "amount": {"$sum": "$total_amount"}
+            }
+        },
+        {"$sort": {"_id.year": -1, "_id.week": -1}},
+        {"$limit": 12}
+    ]).to_list(length=None)
+
+    # Monthly sales (past 12 months)
     monthly_sales = await sales_collection.aggregate([
         {"$match": {"organization_id": org_id}},
         {
@@ -274,24 +284,52 @@ async def get_sales_trends(
                     "year": {"$year": "$date"},
                     "month": {"$month": "$date"}
                 },
-                "amount": {"$sum": "$amount"}
+                "amount": {"$sum": "$total_amount"}
             }
         },
-        {"$sort": {"_id.year": -1, "_id.month": -1}}
+        {"$sort": {"_id.year": -1, "_id.month": -1}},
+        {"$limit": 12}
+    ]).to_list(length=None)
+
+    # Yearly sales
+    yearly_sales = await sales_collection.aggregate([
+        {"$match": {"organization_id": org_id}},
+        {
+            "$group": {
+                "_id": {"year": {"$year": "$date"}},
+                "amount": {"$sum": "$total_amount"}
+            }
+        },
+        {"$sort": {"_id.year": -1}}
     ]).to_list(length=None)
 
     return {
-        "yearlySales": [
-            {"year": item["_id"]["year"], "amount": item["amount"]}
-            for item in yearly_sales
+        "dailySales": [
+            {
+                "date": f"{item['_id']['year']}-{item['_id']['month']:02d}-{item['_id']['day']:02d}",
+                "amount": item["amount"]
+            }
+            for item in daily_sales
+        ],
+        "weeklySales": [
+            {
+                "year": item["_id"]["year"],
+                "week": item["_id"]["week"],
+                "amount": item["amount"]
+            }
+            for item in weekly_sales
         ],
         "monthlySales": [
             {
-                "month": datetime(2025, item["_id"]["month"], 1).strftime("%b"),
+                "month": datetime(item["_id"]["year"], item["_id"]["month"], 1).strftime("%b"),
                 "year": item["_id"]["year"],
                 "amount": item["amount"]
             }
             for item in monthly_sales
+        ],
+        "yearlySales": [
+            {"year": item["_id"]["year"], "amount": item["amount"]}
+            for item in yearly_sales
         ]
     }
 

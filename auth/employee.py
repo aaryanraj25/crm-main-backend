@@ -40,7 +40,7 @@ async def employee_login(
         raise HTTPException(status_code=401, detail="Invalid password")
 
     token_data = {
-        "employee_id": employee.get("employee_id"),  # ✅ custom alphanumeric ID
+        "employee_id": employee.get("_id"),  # ✅ custom alphanumeric ID
         "role": "employee",
         "organization": employee.get("organization", ""),
         "organization_id": employee.get("organization_id", ""),

@@ -120,14 +120,14 @@ async def admin_login(email: str, password: str, db=Depends(get_database)):
 
     # Fetch organization using string-based ID
     organization = await organization_collection.find_one(
-        {"organization_id": admin["organization_id"]}
+        {"_id": admin["organization_id"]}
     )
     if not organization:
         raise HTTPException(status_code=404, detail="Organization not found")
 
     # Prepare admin details
     admin_details = {
-        "id": admin.get("admin_id"),  # Assuming you store admin_id during registration
+        "id": admin.get("_id"),  # Assuming you store admin_id during registration
         "name": admin.get("name", ""),
         "email": admin["email"],
         "role": "admin",
@@ -135,13 +135,13 @@ async def admin_login(email: str, password: str, db=Depends(get_database)):
 
     # Prepare organization details
     organization_details = {
-        "id": organization.get("organization_id"),
+        "id": organization.get("_id"),
         "name": organization.get("name"),
     }
 
     # Generate access token
     token = create_access_token({
-        "admin_id": admin.get("admin_id"),
+        "admin_id": admin.get("_id"),
         "role": "admin",
         "organization_id": admin.get("organization_id"),
         "organization_name": admin.get("organization")
