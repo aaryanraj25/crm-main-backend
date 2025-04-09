@@ -16,3 +16,4 @@ openpyxl
 python-multipart
 geopy
 httpx
+requests
