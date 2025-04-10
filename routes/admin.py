@@ -1,15 +1,18 @@
-from fastapi import APIRouter, HTTPException, Depends
+import random
+import string
+from fastapi import APIRouter, HTTPException, Depends, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from database import (
     get_database, employee_collection, admins_collection,
     sales_collection, visits_collection, product_collection,
     organization_collection, orders_collection, attendance_collection,
     wfh_request
 )
+from dependencies import hash_password
 from security import get_current_admin
-from services.email_service import send_employee_invitation, send_admin_invitation
+from services.email_service import send_admin_otp_email, send_employee_invitation, send_admin_invitation
 from models.products import OrderResponse
 from models.employee import WFHRequestStatus
 from utils import (
@@ -579,3 +582,120 @@ async def get_employees_by_admin(
         raise HTTPException(status_code=404, detail="No employees found for your organization")
 
     return {"organization_id": organization_id, "employees": employees}
+
+
+@router.get("/admin/employee/{employee_id}")
+async def get_employee_details(
+    employee_id: str,
+    start_date: str = Query(None),
+    end_date: str = Query(None),
+    order_status: str = Query(None, description="Filter by delivered_status: Pending, Rejected, Completed"),
+    attendance_status: str = Query(None, description="Filter attendance by status: Active, Inactive"),
+    admin: dict = Depends(get_current_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    employee_collection = db["employee"]
+    orders_collection = db["orders"]
+    sales_collection = db["sales"]
+    attendance_collection = db["attendance"]
+    client_collection = db["client"]
+
+    # Admin's organization ID
+    org_id = admin.get("organization_id")
+    if not org_id:
+        raise HTTPException(status_code=403, detail="Invalid admin organization")
+
+    # Get employee
+    employee = await employee_collection.find_one({"_id": employee_id, "organization_id": org_id})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found in your organization")
+
+    # Parse date filters
+    date_filter = {}
+    if start_date and end_date:
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+            date_filter = {"$gte": start, "$lte": end}
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    # Orders filter
+    order_query = {"employee_id": employee_id}
+    if order_status:
+        order_query["delivered_status"] = order_status
+    orders = await orders_collection.find(order_query).to_list(length=None)
+
+    # Sales filter
+    sales_query = {"employee_id": employee_id}
+    if date_filter:
+        sales_query["sale_date"] = date_filter  # Use your correct field name
+    sales = await sales_collection.find(sales_query).to_list(length=None)
+
+    # Attendance filter
+    attendance_query = {"employee_id": employee_id}
+    if date_filter:
+        attendance_query["date"] = date_filter
+    if attendance_status:
+        attendance_query["status"] = attendance_status
+    attendance = await attendance_collection.find(attendance_query).to_list(length=None)
+
+    # Clients (no filtering)
+    client = await client_collection.find({"employee_id": employee_id}).to_list(length=None)
+
+    return {
+        "employee": employee,
+        "orders": orders,
+        "sales": sales,
+        "attendance": attendance,
+        "clients": client
+    }
+    
+
+
+
+otp_store = {}
+
+def generate_otp(length=6):
+    return ''.join(random.choices(string.digits, k=length))
+
+@router.post("/admin/forgot-password/request")
+async def request_otp(email: str, db: AsyncIOMotorDatabase = Depends(get_database)):
+    admin = await db["admin"].find_one({"email": email})
+    if not admin:
+        raise HTTPException(status_code=404, detail="Admin not found")
+
+    otp = generate_otp()
+    otp_store[email] = {
+        "otp": otp,
+        "expires": datetime.utcnow() + timedelta(minutes=10)
+    }
+
+    await send_admin_otp_email(email,admin["name"], otp)
+    return {"message": "OTP sent to email"}
+
+@router.post("/admin/forgot-password/verify")
+async def verify_otp(email: str, otp: str):
+    otp_data = otp_store.get(email)
+    if not otp_data:
+        raise HTTPException(status_code=400, detail="No OTP found")
+
+    if otp_data["expires"] < datetime.utcnow():
+        otp_store.pop(email, None)
+        raise HTTPException(status_code=400, detail="OTP expired")
+
+    if otp_data["otp"] != otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+
+    return {"message": "OTP verified"}
+
+@router.post("/admin/forgot-password/reset")
+async def reset_password(email: str, new_password: str, db: AsyncIOMotorDatabase = Depends(get_database)):
+    if email not in otp_store:
+        raise HTTPException(status_code=400, detail="OTP not verified")
+
+    hashed = hash_password(new_password)
+    await db["admin"].update_one({"email": email}, {"$set": {"password": hashed}})
+    otp_store.pop(email, None)
+
+    return {"message": "Password updated successfully"}

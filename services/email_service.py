@@ -22,15 +22,20 @@ async def send_email(to_email: str, subject: str, content: str) -> bool:
         msg["To"] = to_email
         msg.set_content(content)
 
-        async with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.send_message(msg)
-            logger.info(f"Email sent successfully to {to_email}")
-            return True
+        # smtplib.SMTP is synchronous — use regular `with`, not `async with`
+        def sync_send():
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                server.starttls()
+                server.login(SENDER_EMAIL, SENDER_PASSWORD)
+                server.send_message(msg)
+                logger.info(f"Email sent successfully to {to_email}")
+
+        await asyncio.to_thread(sync_send)  # Run blocking code in a thread
+        return True
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
         return False
+
 
 async def send_verification_email(to_email: str, name: str) -> bool:
     subject = "Admin Registration Pending Verification"
@@ -82,5 +87,23 @@ async def send_admin_invitation(to_email: str, name: str, organization: str) -> 
     
     Regards,
     {organization} Team
+    """
+    return await send_email(to_email, subject, content)
+
+async def send_admin_otp_email(to_email: str, name: str, otp: str) -> bool:
+    subject = f"OTP for Admin Access"
+    content = f"""
+    Hi {name},
+
+    You’ve requested to verify your identity.
+
+    Your One-Time Password (OTP) is: **{otp}**
+
+    This OTP is valid for the next 10 minutes. Please do not share it with anyone.
+
+    If you didn’t request this, please ignore this email or contact support.
+
+    Best regards,  
+    CRM Team
     """
     return await send_email(to_email, subject, content)
