@@ -71,6 +71,165 @@ async def create_employee(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/admin/profile")
+async def get_admin_profile(
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    current_admin: dict = Depends(get_current_admin)
+):
+    try:
+        admin_id = current_admin["admin_id"]
+
+        # Get detailed admin information from database
+        admin_profile = await admins_collection.find_one({"_id": admin_id})
+
+        if not admin_profile:
+            raise HTTPException(status_code=404, detail="Admin profile not found")
+
+        # Get organization details
+        organization = await organization_collection.find_one(
+            {"_id": admin_profile["organization_id"]}
+        )
+
+        # Get counts of employees, total sales, and total orders
+        employee_count = await employee_collection.count_documents(
+            {"organization_id": admin_profile["organization_id"]}
+        )
+
+        total_sales = await sales_collection.aggregate([
+            {"$match": {"organization_id": admin_profile["organization_id"]}},
+            {"$group": {"_id": None, "total": {"$sum": "$total_amount"}}}
+        ]).to_list(length=1)
+
+        total_orders = await orders_collection.count_documents(
+            {"organization_id": admin_profile["organization_id"]}
+        )
+
+        # Construct response
+        profile_data = {
+            "admin_id": admin_profile["_id"],
+            "name": admin_profile["name"],
+            "email": admin_profile["email"],
+            "phone": admin_profile.get("phone", ""),
+            "role": admin_profile["role"],
+            "created_at": admin_profile["created_at"],
+            "organization": {
+                "id": admin_profile["organization_id"],
+                "name": admin_profile["organization"],
+                "details": organization if organization else None
+            },
+            "statistics": {
+                "total_employees": employee_count,
+                "total_sales": total_sales[0]["total"] if total_sales else 0,
+                "total_orders": total_orders
+            },
+            "permissions": admin_profile.get("permissions", []),
+            "last_login": admin_profile.get("last_login"),
+            "is_verified": admin_profile.get("is_verified", False)
+        }
+
+        return profile_data
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/admin/profile")
+async def update_admin_profile(
+    name: Optional[str] = None,
+    phone: Optional[str] = None,
+    current_admin: dict = Depends(get_current_admin)
+):
+    try:
+        admin_id = current_admin["admin_id"]
+
+        # Prepare update data
+        update_data = {}
+        if name:
+            update_data["name"] = name
+        if phone:
+            update_data["phone"] = phone
+
+        if not update_data:
+            raise HTTPException(
+                status_code=400,
+                detail="No update data provided"
+            )
+
+        # Add updated_at timestamp
+        update_data["updated_at"] = get_current_datetime()
+
+        # Update admin profile
+        result = await admins_collection.update_one(
+            {"_id": admin_id},
+            {"$set": update_data}
+        )
+
+        if result.modified_count == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="Admin profile not found or no changes made"
+            )
+
+        # Get updated profile
+        updated_profile = await admins_collection.find_one({"_id": admin_id})
+
+        return {
+            "message": "Profile updated successfully",
+            "admin_id": admin_id,
+            "name": updated_profile["name"],
+            "phone": updated_profile.get("phone", ""),
+            "updated_at": updated_profile.get("updated_at")
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/admin/profile/change-password")
+async def change_admin_password(
+    current_password: str,
+    new_password: str,
+    db: AsyncIOMotorDatabase = Depends(get_database),
+    current_admin: dict = Depends(get_current_admin)
+):
+    try:
+        admin_id = current_admin["admin_id"]
+
+        # Get admin from database
+        admin = await admins_collection.find_one({"_id": admin_id})
+        if not admin:
+            raise HTTPException(status_code=404, detail="Admin not found")
+
+        # Verify current password
+        if not verify_password(current_password, admin["password"]):
+            raise HTTPException(
+                status_code=400,
+                detail="Current password is incorrect"
+            )
+
+        # Hash new password
+        hashed_password = get_password_hash(new_password)
+
+        # Update password
+        result = await admins_collection.update_one(
+            {"_id": admin_id},
+            {
+                "$set": {
+                    "password": hashed_password,
+                    "password_updated_at": get_current_datetime()
+                }
+            }
+        )
+
+        if result.modified_count == 0:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to update password"
+            )
+
+        return {"message": "Password updated successfully"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/employee-location/{employee_id}")
 async def get_employee_location(
     employee_id: str,
