@@ -523,3 +523,21 @@ async def get_employee_tracking(
         })
 
     return {"tracking_data": tracking_data}
+
+@router.get("/admin/employees")
+async def get_employees_by_admin(
+    admin: dict = Depends(get_current_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    organization_id = admin.get("organization_id")
+    if not organization_id:
+        raise HTTPException(status_code=400, detail="Admin does not belong to an organization")
+
+    employee_collection = db["employee"]
+    employees_cursor = employee_collection.find({"organization_id": organization_id})
+    employees = await employees_cursor.to_list(length=None)
+
+    if not employees:
+        raise HTTPException(status_code=404, detail="No employees found for your organization")
+
+    return {"organization_id": organization_id, "employees": employees}

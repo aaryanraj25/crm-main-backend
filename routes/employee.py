@@ -4,6 +4,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import Optional, List
 from datetime import datetime, timezone
 from geopy.distance import geodesic
+from pydantic import BaseModel, Field
 
 from database import (
     get_database, employee_collection, admins_collection,
@@ -18,11 +19,15 @@ from models.employee import (
 )
 from models.products import OrderCreate
 from utils import (
-    generate_visit_id, generate_order_id,
+    generate_random_id, generate_visit_id, generate_order_id,
     get_current_datetime
 )
 
 router = APIRouter()
+
+class LocationData(BaseModel):
+    latitude: Optional[float] = Field(None, description="Latitude of employee")
+    longitude: Optional[float] = Field(None, description="Longitude of employee")
 
 @router.get("/profile")
 async def get_employee_profile(
@@ -58,17 +63,19 @@ async def get_employee_profile(
 
 @router.post("/clock-in")
 async def clock_in(
+    location: LocationData = Depends(),
     work_from_home: bool = False,
-    employee: dict = Depends(get_current_employee)
+    employee: dict = Depends(get_current_employee),
+    db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    attendance_collection = db["attendance"]
+    employee_collection = db["employee"]
     employee_id = employee.get("employee_id")
-    
+
     if not employee_id:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    today = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     existing_entry = await attendance_collection.find_one({
         "employee_id": employee_id,
@@ -79,13 +86,20 @@ async def clock_in(
         raise HTTPException(status_code=400, detail="Already clocked in for today")
 
     attendance_data = {
+        "_id": generate_random_id("ATT"),
         "employee_id": employee_id,
         "clock_in_time": get_current_datetime(),
         "date": today,
         "work_from_home": work_from_home,
         "organization_id": employee.get("organization_id")
     }
-    
+
+    if not work_from_home and location.latitude and location.longitude:
+        attendance_data["clock_in_location"] = {
+            "latitude": location.latitude,
+            "longitude": location.longitude
+        }
+
     await attendance_collection.insert_one(attendance_data)
     await employee_collection.update_one(
         {"_id": employee_id},
@@ -99,15 +113,19 @@ async def clock_in(
     }
 
 @router.post("/clock-out")
-async def clock_out(employee: dict = Depends(get_current_employee)):
+async def clock_out(
+    location: LocationData = Depends(),
+    employee: dict = Depends(get_current_employee),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    attendance_collection = db["attendance"]
+    employee_collection = db["employee"]
     employee_id = employee.get("employee_id")
-    
+
     if not employee_id:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    today = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     attendance_entry = await attendance_collection.find_one({
         "employee_id": employee_id,
@@ -121,15 +139,27 @@ async def clock_out(employee: dict = Depends(get_current_employee)):
         raise HTTPException(status_code=400, detail="Already clocked out for today")
 
     clock_out_time = get_current_datetime()
-    
+    clock_in_time = attendance_entry["clock_in_time"]
+
+    if clock_in_time.tzinfo is None:
+        clock_in_time = clock_in_time.replace(tzinfo=timezone.utc)
+
+    total_hours = (clock_out_time - clock_in_time).total_seconds() / 3600
+
+    update_data = {
+        "clock_out_time": clock_out_time,
+        "total_hours": total_hours
+    }
+
+    if not attendance_entry.get("work_from_home") and location.latitude and location.longitude:
+        update_data["clock_out_location"] = {
+            "latitude": location.latitude,
+            "longitude": location.longitude
+        }
+
     await attendance_collection.update_one(
         {"_id": attendance_entry["_id"]},
-        {
-            "$set": {
-                "clock_out_time": clock_out_time,
-                "total_hours": (clock_out_time - attendance_entry["clock_in_time"]).total_seconds() / 3600
-            }
-        }
+        {"$set": update_data}
     )
 
     await employee_collection.update_one(
@@ -141,6 +171,7 @@ async def clock_out(employee: dict = Depends(get_current_employee)):
         "message": "Clock-out successful",
         "clock_out_time": clock_out_time
     }
+
 
 @router.post("/location")
 async def post_employee_location(
@@ -183,7 +214,8 @@ async def add_clinic(
     clinic_data.update({
         "employee_id": employee_id,
         "organization_id": employee.get("organization_id"),
-        "created_at": get_current_datetime()
+        "created_at": get_current_datetime(),
+        "_id": generate_random_id("CLI")
     })
 
     result = await clinic_collection.insert_one(clinic_data)
@@ -211,7 +243,9 @@ async def add_client(
     client_data.update({
         "employee_id": employee_id,
         "organization_id": employee.get("organization_id"),
-        "created_at": get_current_datetime()
+        "created_at": get_current_datetime(),
+        "_id": generate_random_id("CLN")
+        
     })
 
     result = await client_collection.insert_one(client_data)
@@ -237,7 +271,8 @@ async def request_wfh(
         "date": request.date,
         "reason": request.reason,
         "status": request.status,
-        "created_at": get_current_datetime()
+        "created_at": get_current_datetime(),
+        "_id": generate_random_id("WFH")
     }
 
     result = await wfh_request.insert_one(wfh_data)
