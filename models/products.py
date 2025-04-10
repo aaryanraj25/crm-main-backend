@@ -1,7 +1,7 @@
 # models/products.py
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from datetime import date
+from datetime import datetime
 
 class ProductModel(BaseModel):
     name: str
@@ -24,7 +24,7 @@ class OrderCreate(BaseModel):
     total_amount: float
     payment_status: str = "Pending"  # Pending/Paid
     delivered_status: str = "Pending"  # Pending/Completed
-    order_date: date
+    order_date: datetime
 
 class OrderResponse(BaseModel):
     order_id: str
@@ -35,4 +35,4 @@ class OrderResponse(BaseModel):
     total_amount: float
     payment_status: str
     delivered_status: str
-    order_date: date
+    order_date: datetime

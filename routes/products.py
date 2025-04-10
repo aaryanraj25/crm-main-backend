@@ -63,7 +63,7 @@ async def list_products(
         raise HTTPException(status_code=401, detail="Invalid token")
 
     # Build query
-    query = {"organization_id": organization_id, "is_active": True}
+    query = {"organization_id": organization_id}
     if category:
         query["category"] = category
     if search:
