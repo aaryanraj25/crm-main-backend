@@ -1,104 +1,115 @@
-# routes/hospitals.py
 from fastapi import APIRouter, HTTPException, Depends, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from typing import List, Optional
-from datetime import datetime, timezone
+from typing import List, Optional, Dict
+from datetime import datetime
 from geopy.distance import geodesic
 import requests
 from database import (
-    get_database, clinic_collection, visits_collection,
-    organization_collection, employee_collection
+    get_database, clinic_collection, employee_collection
 )
 from models.hospitals import (
     HospitalCreate, HospitalResponse, HospitalType,
     HospitalList
 )
 from security import get_current_admin, get_current_employee
-from utils import get_current_datetime
+from utils import get_current_datetime, generate_random_id
 
 router = APIRouter()
 
-GOOGLE_MAPS_API_KEY = "your_google_maps_api_key"
+GOOGLE_MAPS_API_KEY = "AIzaSyAO89GizFNQftsciix7q7yL6JZHoOYSdhg"
 
-@router.post("/add", response_model=HospitalResponse)
-async def add_hospital(
-    hospital: HospitalCreate,
-    admin: dict = Depends(get_current_admin),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+class GooglePlacesService:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.text_search_url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+        self.details_url = "https://maps.googleapis.com/maps/api/place/details/json"
+
+    def search_by_name(
+        self,
+        name: str,
+        city: Optional[str] = None,
+        type_: str = "hospital"
+    ) -> List[Dict]:
+        query = name
+        if city:
+            query += f", {city}"
+        params = {
+            "query": query,
+            "type": type_,
+            "key": self.api_key
+        }
+        response = requests.get(self.text_search_url, params=params)
+        data = response.json()
+        if data.get("status") != "OK":
+            return []
+        return data["results"]
+
+    def get_place_details(self, place_id: str) -> Optional[Dict]:
+        params = {
+            "place_id": place_id,
+            "fields": "name,formatted_address,geometry,formatted_phone_number,website,rating,place_id",
+            "key": self.api_key
+        }
+        response = requests.get(self.details_url, params=params)
+        data = response.json()
+        if data.get("status") != "OK":
+            return None
+        return data["result"]
+
+google_places = GooglePlacesService(GOOGLE_MAPS_API_KEY)
+
+# Common search endpoint
+@router.get("/search", response_model=List[dict])
+async def search_hospital_by_name(
+    name: str = Query(..., description="Hospital/Clinic name"),
+    city: Optional[str] = Query(None, description="City name"),
+    type_: str = Query("hospital", description="Type: hospital or clinic")
 ):
-    organization_id = admin.get("organization_id")
-    if not organization_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    """
+    Search hospitals/clinics by name using Google Places API.
+    This endpoint is used before adding a new hospital/clinic.
+    """
+    results = google_places.search_by_name(name, city, type_)
+    return [
+        {
+            "place_id": r["place_id"],
+            "name": r["name"],
+            "address": r.get("formatted_address"),
+            "latitude": r.get("geometry", {}).get("location", {}).get("lat"),
+            "longitude": r.get("geometry", {}).get("location", {}).get("lng"),
+            "rating": r.get("rating")
+        }
+        for r in results
+    ]
 
-    # Check if hospital with same name exists in the organization
-    existing_hospital = await clinic_collection.find_one({
-        "name": hospital.name,
-        "organization_id": organization_id
-    })
-    if existing_hospital:
-        raise HTTPException(
-            status_code=400,
-            detail="Hospital with this name already exists"
-        )
-
-    # If coordinates not provided, try to get from address using Google Maps API
-    if not hospital.latitude or not hospital.longitude:
-        try:
-            address = f"{hospital.address}, {hospital.city}, {hospital.state}, {hospital.country}"
-            url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={GOOGLE_MAPS_API_KEY}"
-            response = requests.get(url)
-            data = response.json()
-            
-            if data["status"] == "OK":
-                location = data["results"][0]["geometry"]["location"]
-                hospital.latitude = location["lat"]
-                hospital.longitude = location["lng"]
-                hospital.google_place_id = data["results"][0]["place_id"]
-        except Exception as e:
-            print(f"Error getting coordinates: {e}")
-
-    hospital_data = hospital.model_dump()
-    hospital_data.update({
-        "organization_id": organization_id,
-        "added_by": admin["admin_id"],
-        "added_by_role": "admin",
-        "created_at": get_current_datetime(),
-        "source": "database"
-    })
-
-    result = await clinic_collection.insert_one(hospital_data)
-    hospital_data["_id"] = result.inserted_id
-
-    return HospitalResponse(**hospital_data)
-
-@router.get("/list", response_model=HospitalList)
-async def list_hospitals(
+# Admin Routes
+@router.get("/admin/clinics", response_model=HospitalList)
+async def get_admin_clinics(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
     search: Optional[str] = None,
     type: Optional[HospitalType] = None,
     city: Optional[str] = None,
     state: Optional[str] = None,
-    latitude: Optional[float] = None,
-    longitude: Optional[float] = None,
-    radius: Optional[float] = 5.0,  # Default 5 km radius
-    employee: dict = Depends(get_current_employee),
+    admin: dict = Depends(get_current_admin),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    organization_id = employee.get("organization_id")
+    """Get all clinics for admin with filtering options"""
+    organization_id = admin.get("organization_id")
     if not organization_id:
         raise HTTPException(status_code=401, detail="Invalid token")
 
     # Build query
-    query = {"organization_id": organization_id, "status": "active"}
-    
+    query = {"organization_id": organization_id}
+
     if search:
         query["$or"] = [
             {"name": {"$regex": search, "$options": "i"}},
             {"address": {"$regex": search, "$options": "i"}},
+            {"city": {"$regex": search, "$options": "i"}},
             {"specialties": {"$regex": search, "$options": "i"}}
         ]
-    
+
     if type:
         query["type"] = type
     if city:
@@ -109,269 +120,103 @@ async def list_hospitals(
     # Get total count
     total_count = await clinic_collection.count_documents(query)
 
-    # Get hospitals
-    hospitals = await clinic_collection.find(query) \
+    # Get clinics
+    clinics = await clinic_collection.find(query) \
         .sort("created_at", -1) \
         .skip(skip) \
         .limit(limit) \
-        .to_list(length=limit)
+        .to_list(length=None)
 
-    # Calculate distances if coordinates provided
-    if latitude is not None and longitude is not None:
-        user_location = (latitude, longitude)
-        for hospital in hospitals:
-            if hospital.get("latitude") and hospital.get("longitude"):
-                hospital_location = (hospital["latitude"], hospital["longitude"])
-                distance = geodesic(user_location, hospital_location).kilometers
-                hospital["distance"] = round(distance, 2)
-                hospital["within_range"] = distance <= radius
-            else:
-                hospital["distance"] = None
-                hospital["within_range"] = None
-
-    # Get work mode for employee
-    work_mode = None
-    if employee.get("employee_id"):
-        emp_data = await employee_collection.find_one(
-            {"_id": employee["employee_id"]},
-            {"work_mode": 1}
-        )
-        if emp_data:
-            work_mode = emp_data.get("work_mode")
+    # Process clinics to handle _id
+    processed_clinics = []
+    for clinic in clinics:
+        clinic['id'] = clinic.pop('_id')  # Replace _id with id
+        processed_clinics.append(clinic)
 
     return HospitalList(
         total_hospitals=total_count,
-        work_mode=work_mode,
-        coordinates_provided=latitude is not None and longitude is not None,
-        hospitals=[HospitalResponse(**h) for h in hospitals]
+        work_mode=None,
+        coordinates_provided=False,
+        hospitals=[HospitalResponse(**clinic) for clinic in processed_clinics]
     )
 
-@router.get("/{hospital_id}", response_model=HospitalResponse)
-async def get_hospital(
-    hospital_id: str,
-    employee: dict = Depends(get_current_employee),
-    db: AsyncIOMotorDatabase = Depends(get_database)
-):
-    organization_id = employee.get("organization_id")
-    if not organization_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    hospital = await clinic_collection.find_one({
-        "_id": hospital_id,
-        "organization_id": organization_id
-    })
-
-    if not hospital:
-        raise HTTPException(status_code=404, detail="Hospital not found")
-
-    # Get visit statistics
-    visit_stats = await visits_collection.aggregate([
-        {
-            "$match": {
-                "hospital_id": hospital_id,
-                "organization_id": organization_id
-            }
-        },
-        {
-            "$group": {
-                "_id": None,
-                "total_visits": {"$sum": 1},
-                "last_visit": {"$max": "$created_at"}
-            }
-        }
-    ]).to_list(length=1)
-
-    if visit_stats:
-        hospital["visit_statistics"] = {
-            "total_visits": visit_stats[0]["total_visits"],
-            "last_visit": visit_stats[0]["last_visit"]
-        }
-    else:
-        hospital["visit_statistics"] = {
-            "total_visits": 0,
-            "last_visit": None
-        }
-
-    return HospitalResponse(**hospital)
-
-@router.put("/{hospital_id}", response_model=HospitalResponse)
-async def update_hospital(
-    hospital_id: str,
-    hospital: HospitalCreate,
+@router.post("/admin/clinics/google-place", response_model=HospitalResponse)
+async def add_clinic_from_google_admin(
+    place_id: str,
     admin: dict = Depends(get_current_admin),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    """Add a clinic using Google Places API by admin"""
     organization_id = admin.get("organization_id")
     if not organization_id:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    existing_hospital = await clinic_collection.find_one({
-        "_id": hospital_id,
+    # Check for duplicates
+    existing = await clinic_collection.find_one({
+        "google_place_id": place_id,
         "organization_id": organization_id
     })
+    if existing:
+        raise HTTPException(status_code=400, detail="Clinic already exists")
 
-    if not existing_hospital:
-        raise HTTPException(status_code=404, detail="Hospital not found")
+    # Fetch details from Google
+    details = google_places.get_place_details(place_id)
+    if not details:
+        raise HTTPException(status_code=404, detail="Place not found")
 
-    # Check if name is being changed and if new name exists
-    if hospital.name != existing_hospital["name"]:
-        name_exists = await clinic_collection.find_one({
-            "name": hospital.name,
-            "organization_id": organization_id,
-            "_id": {"$ne": hospital_id}
-        })
-        if name_exists:
-            raise HTTPException(
-                status_code=400,
-                detail="Hospital with this name already exists"
-            )
+    # Extract address components
+    address_parts = details.get("formatted_address", "").split(",")
 
-    # Update coordinates if address changed
-    if (hospital.address != existing_hospital["address"] or
-        hospital.city != existing_hospital["city"] or
-        hospital.state != existing_hospital["state"]):
-        try:
-            address = f"{hospital.address}, {hospital.city}, {hospital.state}, {hospital.country}"
-            url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={GOOGLE_MAPS_API_KEY}"
-            response = requests.get(url)
-            data = response.json()
-            
-            if data["status"] == "OK":
-                location = data["results"][0]["geometry"]["location"]
-                hospital.latitude = location["lat"]
-                hospital.longitude = location["lng"]
-                hospital.google_place_id = data["results"][0]["place_id"]
-        except Exception as e:
-            print(f"Error updating coordinates: {e}")
+    # Generate CLN ID
+    clinic_id = generate_random_id("CLN")
 
-    update_data = hospital.model_dump()
-    update_data.update({
-        "updated_at": get_current_datetime(),
-        "updated_by": admin["admin_id"]
-    })
-
-    result = await clinic_collection.update_one(
-        {"_id": hospital_id, "organization_id": organization_id},
-        {"$set": update_data}
-    )
-
-    if result.modified_count == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Hospital not updated"
-        )
-
-    updated_hospital = await clinic_collection.find_one({"_id": hospital_id})
-    return HospitalResponse(**updated_hospital)
-
-@router.delete("/{hospital_id}")
-async def delete_hospital(
-    hospital_id: str,
-    admin: dict = Depends(get_current_admin),
-    db: AsyncIOMotorDatabase = Depends(get_database)
-):
-    organization_id = admin.get("organization_id")
-    if not organization_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    # Check if hospital exists
-    hospital = await clinic_collection.find_one({
-        "_id": hospital_id,
-        "organization_id": organization_id
-    })
-
-    if not hospital:
-        raise HTTPException(status_code=404, detail="Hospital not found")
-
-    # Check if there are any active visits
-    active_visits = await visits_collection.count_documents({
-        "hospital_id": hospital_id,
-        "status": "active"
-    })
-
-    if active_visits > 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot delete hospital with active visits"
-        )
-
-    # Soft delete by setting status to inactive
-    result = await clinic_collection.update_one(
-        {"_id": hospital_id, "organization_id": organization_id},
-        {
-            "$set": {
-                "status": "inactive",
-                "deleted_at": get_current_datetime(),
-                "deleted_by": admin["admin_id"]
-            }
-        }
-    )
-
-    if result.modified_count == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Hospital not deleted"
-        )
-
-    return {"message": "Hospital deleted successfully"}
-
-@router.get("/stats/overview")
-async def get_hospital_stats(
-    admin: dict = Depends(get_current_admin),
-    db: AsyncIOMotorDatabase = Depends(get_database)
-):
-    organization_id = admin.get("organization_id")
-    if not organization_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    # Get hospital statistics
-    hospital_stats = await clinic_collection.aggregate([
-        {"$match": {"organization_id": organization_id}},
-        {
-            "$group": {
-                "_id": "$type",
-                "count": {"$sum": 1},
-                "cities": {"$addToSet": "$city"},
-                "states": {"$addToSet": "$state"}
-            }
-        }
-    ]).to_list(None)
-
-    # Get visit statistics
-    visit_stats = await visits_collection.aggregate([
-        {"$match": {"organization_id": organization_id}},
-        {
-            "$group": {
-                "_id": {
-                    "year": {"$year": "$created_at"},
-                    "month": {"$month": "$created_at"}
-                },
-                "total_visits": {"$sum": 1},
-                "unique_hospitals": {"$addToSet": "$hospital_id"},
-                "unique_employees": {"$addToSet": "$employee_id"}
-            }
-        },
-        {"$sort": {"_id.year": -1, "_id.month": -1}},
-        {"$limit": 12}
-    ]).to_list(None)
-
-    return {
-        "hospital_statistics": hospital_stats,
-        "visit_trends": visit_stats,
-        "total_hospitals": sum(stat["count"] for stat in hospital_stats),
-        "total_cities": len(set(city for stat in hospital_stats for city in stat["cities"])),
-        "total_states": len(set(state for stat in hospital_stats for state in stat["states"]))
+    clinic_data = {
+        "_id": clinic_id,  # Use the CLN ID as MongoDB _id
+        "id": clinic_id,   # Keep this for consistency
+        "name": details["name"],
+        "address": address_parts[0].strip() if address_parts else details.get("formatted_address", ""),
+        "city": address_parts[-3].strip() if len(address_parts) > 3 else "",
+        "state": address_parts[-2].strip() if len(address_parts) > 2 else "",
+        "country": address_parts[-1].strip() if len(address_parts) > 1 else "India",
+        "pincode": "",  # Extract from address if possible
+        "latitude": details["geometry"]["location"]["lat"],
+        "longitude": details["geometry"]["location"]["lng"],
+        "phone": details.get("formatted_phone_number"),
+        "website": details.get("website"),
+        "google_place_id": place_id,
+        "rating": details.get("rating"),
+        "organization_id": organization_id,
+        "added_by": admin["admin_id"],
+        "added_by_role": "admin",
+        "created_at": get_current_datetime(),
+        "source": "google_places",
+        "status": "active",
+        "type": HospitalType.HOSPITAL
     }
 
-@router.get("/nearby")
-async def get_nearby_hospitals(
-    latitude: float,
-    longitude: float,
-    radius: float = Query(5.0, gt=0),  # radius in kilometers
+    try:
+        await clinic_collection.insert_one(clinic_data)
+        # Remove _id from response
+        clinic_data.pop('_id', None)
+        return HospitalResponse(**clinic_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add clinic: {str(e)}")
+
+
+
+# Employee Routes
+@router.get("/employee/clinics", response_model=HospitalList)
+async def get_employee_clinics(
+    latitude: float = Query(..., ge=-90, le=90),
+    longitude: float = Query(..., ge=-180, le=180),
+    search: Optional[str] = None,
     type: Optional[HospitalType] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
     employee: dict = Depends(get_current_employee),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    """Get clinics within 100 meters of employee location"""
     organization_id = employee.get("organization_id")
     if not organization_id:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -383,79 +228,116 @@ async def get_nearby_hospitals(
         "latitude": {"$exists": True},
         "longitude": {"$exists": True}
     }
-    
+
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"address": {"$regex": search, "$options": "i"}},
+            {"specialties": {"$regex": search, "$options": "i"}}
+        ]
+
     if type:
         query["type"] = type
 
-    # Get all hospitals with coordinates
-    hospitals = await clinic_collection.find(query).to_list(None)
+    # Get employee work mode
+    work_mode = None
+    if employee.get("employee_id"):
+        emp_data = await employee_collection.find_one(
+            {"_id": employee["employee_id"]},
+            {"work_mode": 1}
+        )
+        if emp_data:
+            work_mode = emp_data.get("work_mode")
 
-    # Calculate distances and filter by radius
-    nearby_hospitals = []
+    # Get clinics and calculate distances
+    clinics = await clinic_collection.find(query).to_list(None)
     user_location = (latitude, longitude)
+    clinics_with_distance = []
 
-    for hospital in hospitals:
-        hospital_location = (hospital["latitude"], hospital["longitude"])
-        distance = geodesic(user_location, hospital_location).kilometers
-        
-        if distance <= radius:
-            hospital["distance"] = round(distance, 2)
-            nearby_hospitals.append(hospital)
+    # 100 meters = 0.1 kilometers
+    MAX_DISTANCE = 0.1
 
-    # Sort by distance
-    nearby_hospitals.sort(key=lambda x: x["distance"])
+    for clinic in clinics:
+        if clinic.get("latitude") and clinic.get("longitude"):
+            clinic_location = (clinic["latitude"], clinic["longitude"])
+            distance = geodesic(user_location, clinic_location).kilometers
 
-    return {
-        "total": len(nearby_hospitals),
-        "radius": radius,
-        "hospitals": [HospitalResponse(**h) for h in nearby_hospitals]
-    }
+            if distance <= MAX_DISTANCE:  # Within 100 meters
+                clinic['id'] = clinic.pop('_id')
+                clinic["distance"] = round(distance * 1000, 2)  # Convert to meters
+                clinic["within_range"] = True
+                clinics_with_distance.append(clinic)
 
-@router.post("/{hospital_id}/rate")
-async def rate_hospital(
-    hospital_id: str,
-    rating: int = Query(..., ge=1, le=5),
+    # Sort by distance and apply pagination
+    clinics_with_distance.sort(key=lambda x: x["distance"])
+    total_count = len(clinics_with_distance)
+    paginated_clinics = clinics_with_distance[skip:skip + limit]
+
+    return HospitalList(
+        total_hospitals=total_count,
+        work_mode=work_mode,
+        coordinates_provided=True,
+        hospitals=[HospitalResponse(**clinic) for clinic in paginated_clinics]
+    )
+
+@router.post("/employee/clinics/google-place", response_model=HospitalResponse)
+async def add_clinic_from_google_employee(
+    place_id: str,
     employee: dict = Depends(get_current_employee),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
+    """Add a clinic using Google Places API by employee"""
     organization_id = employee.get("organization_id")
     if not organization_id:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    hospital = await clinic_collection.find_one({
-        "_id": hospital_id,
+    # Check for duplicates
+    existing = await clinic_collection.find_one({
+        "google_place_id": place_id,
         "organization_id": organization_id
     })
+    if existing:
+        raise HTTPException(status_code=400, detail="Clinic already exists")
 
-    if not hospital:
-        raise HTTPException(status_code=404, detail="Hospital not found")
+    # Fetch details from Google
+    details = google_places.get_place_details(place_id)
+    if not details:
+        raise HTTPException(status_code=404, detail="Place not found")
 
-    # Update rating
-    current_rating = hospital.get("rating", 0)
-    current_total_ratings = hospital.get("total_ratings", 0)
-    
-    new_total_ratings = current_total_ratings + 1
-    new_rating = ((current_rating * current_total_ratings) + rating) / new_total_ratings
+    # Extract address components
+    address_parts = details.get("formatted_address", "").split(",")
 
-    await clinic_collection.update_one(
-        {"_id": hospital_id},
-        {
-            "$set": {
-                "rating": round(new_rating, 1),
-                "total_ratings": new_total_ratings
-            },
-            "$push": {
-                "ratings": {
-                    "employee_id": employee["employee_id"],
-                    "rating": rating,
-                    "created_at": get_current_datetime()
-                }
-            }
-        }
-    )
+    # Generate CLN ID
+    clinic_id = generate_random_id("CLN")
 
-    return {
-        "message": "Rating submitted successfully",
-        "new_rating": round(new_rating, 1),
-        "total_ratings": new_total_ratings
+    clinic_data = {
+        "_id": clinic_id,  # Use the CLN ID as MongoDB _id
+        "id": clinic_id,   # Keep this for consistency
+        "name": details["name"],
+        "address": address_parts[0].strip() if address_parts else details.get("formatted_address", ""),
+        "city": address_parts[-3].strip() if len(address_parts) > 3 else "",
+        "state": address_parts[-2].strip() if len(address_parts) > 2 else "",
+        "country": address_parts[-1].strip() if len(address_parts) > 1 else "India",
+        "pincode": "",  # Extract from address if possible
+        "latitude": details["geometry"]["location"]["lat"],
+        "longitude": details["geometry"]["location"]["lng"],
+        "phone": details.get("formatted_phone_number"),
+        "website": details.get("website"),
+        "google_place_id": place_id,
+        "rating": details.get("rating"),
+        "organization_id": organization_id,
+        "added_by": employee["employee_id"],
+        "added_by_role": "employee",
+        "created_at": get_current_datetime(),
+        "source": "google_places",
+        "status": "active",
+        "type": HospitalType.HOSPITAL
     }
+
+    try:
+        await clinic_collection.insert_one(clinic_data)
+        # Remove _id from response
+        clinic_data.pop('_id', None)
+        return HospitalResponse(**clinic_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add clinic: {str(e)}")

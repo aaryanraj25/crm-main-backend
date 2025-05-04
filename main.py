@@ -13,6 +13,9 @@ from auth.employee import router as employee_router
 from routes.employee import router as employee_Router
 from routes.products import router as product_Router
 from routes.hospitals import router as hospital_router
+from routes.orders import router as order_router
+from routes.meetings import router as meetings_router
+from routes.clients import router as clients_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -48,6 +51,9 @@ app.include_router(employee_router, prefix="/employee", tags=["Employee"])
 app.include_router(employee_Router, prefix="/employee", tags=["Employee"])
 app.include_router(product_Router, prefix="/product", tags=["Products"])
 app.include_router(hospital_router, prefix="/hospital", tags=["Hospital"])
+app.include_router(order_router, prefix="/orders", tags=["Orders"])
+app.include_router(clients_router, prefix="/clients", tags=["Clients"])
+app.include_router(meetings_router, prefix="/meetings", tags=["Meetings"])
 
 @app.get("/")
 async def health_check():
