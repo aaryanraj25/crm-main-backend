@@ -987,10 +987,10 @@ async def get_employees_by_admin(
 @router.get("/admin/employee/{employee_id}")
 async def get_employee_details(
     employee_id: str,
-    start_date: str = Query(None),
-    end_date: str = Query(None),
-    order_status: str = Query(None, description="Filter by delivered_status: Pending, Rejected, Completed"),
-    attendance_status: str = Query(None, description="Filter attendance by status: Active, Inactive"),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    order_status: Optional[str] = Query(None, description="Filter by delivered_status: Pending, Rejected, Completed"),
+    attendance_status: Optional[str] = Query(None, description="Filter attendance by status: Active, Inactive"),
     admin: dict = Depends(get_current_admin),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
@@ -999,6 +999,7 @@ async def get_employee_details(
     sales_collection = db["sales"]
     attendance_collection = db["attendance"]
     client_collection = db["client"]
+    clinic_collection = db["clinic"]
 
     # Admin's organization ID
     org_id = admin.get("organization_id")
@@ -1010,54 +1011,83 @@ async def get_employee_details(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found in your organization")
 
-    # Parse date filters
-    date_filter = {}
+    # Parse date filters or use current month if not provided
+    now = datetime.now()
     if start_date and end_date:
         try:
             start = datetime.strptime(start_date, "%Y-%m-%d")
             end = datetime.strptime(end_date, "%Y-%m-%d")
-            date_filter = {"$gte": start, "$lte": end}
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+    else:
+        # Default to current month
+        start = datetime(now.year, now.month, 1)
+        end = now  # Current date
+    
+    date_filter = {"$gte": start, "$lte": end}
+    
+    # Calculate total days in the date range (including today)
+    total_days = (end.date() - start.date()).days + 1
+    # Limit to current day (we don't count future days in the current month)
+    effective_days = min(total_days, (now.date() - start.date()).days + 1)
 
     # Orders filter
-    order_query = {"employee_id": employee_id}
+    order_query = {"employee_id": employee_id, "status": "completed"}
     if order_status:
         order_query["delivered_status"] = order_status
     orders = await orders_collection.find(order_query).to_list(length=None)
 
+    # Fetch clinics if orders contain clinic_id
+    clinic_ids = list({order.get("clinic_id") for order in orders if order.get("clinic_id")})
+    clinics = await clinic_collection.find({"_id": {"$in": clinic_ids}}).to_list(length=None)
+    clinic_map = {clinic["_id"]: clinic for clinic in clinics}
+
+    # Enrich orders with clinic name and address
+    for order in orders:
+        clinic_id = order.get("clinic_id")
+        clinic_info = clinic_map.get(clinic_id)
+        if clinic_info:
+            order["clinic_hospital_name"] = clinic_info.get("name")
+            order["clinic_hospital_address"] = clinic_info.get("address")
+        else:
+            order["clinic_hospital_name"] = None
+            order["clinic_hospital_address"] = None
+
     # Sales filter
     sales_query = {"employee_id": employee_id}
-    if date_filter:
-        sales_query["sale_date"] = date_filter  # Use your correct field name
+    sales_query["date"] = date_filter
     sales = await sales_collection.find(sales_query).to_list(length=None)
 
-    # Attendance filter
-    attendance_query = {"employee_id": employee_id}
-    if date_filter:
-        attendance_query["date"] = date_filter
+    # Attendance filter with date range
+    attendance_query = {"employee_id": employee_id, "date": date_filter}
     if attendance_status:
         attendance_query["status"] = attendance_status
-    attendance = await attendance_collection.find(attendance_query).to_list(length=None)
+    
+    # Count days with active attendance
+    attendance_records = await attendance_collection.find(attendance_query).to_list(length=None)
+    
+    # Count days marked as "Active" (or whatever status indicates attendance)
+    active_days = sum(1 for record in attendance_records if record.get("status") == "Active")
+    
+    # Format attendance as "days attended / total days"
+    attendance_summary = {
+        "attended_days": active_days,
+        "total_days": effective_days,
+        "ratio": f"{active_days}/{effective_days}",
+        "percentage": round((active_days / effective_days) * 100, 2) if effective_days > 0 else 0,
+        "records": attendance_records  # Include detailed records for reference
+    }
 
-    # Clients (no filtering)
+    # Clients
     client = await client_collection.find({"employee_id": employee_id}).to_list(length=None)
 
     return {
         "employee": employee,
         "orders": orders,
         "sales": sales,
-        "attendance": attendance,
+        "attendance": attendance_summary,
         "clients": client
     }
-    
-
-
-
-otp_store = {}
-
-def generate_otp(length=6):
-    return ''.join(random.choices(string.digits, k=length))
 
 @router.post("/admin/forgot-password/request")
 async def request_otp(email: str, db: AsyncIOMotorDatabase = Depends(get_database)):

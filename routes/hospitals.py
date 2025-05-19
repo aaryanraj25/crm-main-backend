@@ -9,7 +9,7 @@ from database import (
 )
 from models.hospitals import (
     HospitalCreate, HospitalResponse, HospitalType,
-    HospitalList
+    HospitalList, HospitalManualCreate
 )
 from security import get_current_admin, get_current_employee
 from utils import get_current_datetime, generate_random_id
@@ -63,7 +63,7 @@ google_places = GooglePlacesService(GOOGLE_MAPS_API_KEY)
 async def search_hospital_by_name(
     name: str = Query(..., description="Hospital/Clinic name"),
     city: Optional[str] = Query(None, description="City name"),
-    type_: str = Query("hospital", description="Type: hospital or clinic")
+    type_: str = Query("all", description="Type: hospital or clinic")
 ):
     """
     Search hospitals/clinics by name using Google Places API.
@@ -216,7 +216,7 @@ async def get_employee_clinics(
     employee: dict = Depends(get_current_employee),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    """Get clinics within 100 meters of employee location"""
+    """Get clinics based on employee location or all if WFH"""
     organization_id = employee.get("organization_id")
     if not organization_id:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -241,6 +241,7 @@ async def get_employee_clinics(
 
     # Get employee work mode
     work_mode = None
+    is_wfh = False
     if employee.get("employee_id"):
         emp_data = await employee_collection.find_one(
             {"_id": employee["employee_id"]},
@@ -248,25 +249,40 @@ async def get_employee_clinics(
         )
         if emp_data:
             work_mode = emp_data.get("work_mode")
+            is_wfh = work_mode == "wfh"  # Check if work mode is WFH
 
-    # Get clinics and calculate distances
+    # Get clinics
     clinics = await clinic_collection.find(query).to_list(None)
     user_location = (latitude, longitude)
     clinics_with_distance = []
-
-    # 100 meters = 0.1 kilometers
-    MAX_DISTANCE = 0.1
-
-    for clinic in clinics:
-        if clinic.get("latitude") and clinic.get("longitude"):
-            clinic_location = (clinic["latitude"], clinic["longitude"])
-            distance = geodesic(user_location, clinic_location).kilometers
-
-            if distance <= MAX_DISTANCE:  # Within 100 meters
+    
+    # Process clinics based on work mode
+    if is_wfh:
+        # If WFH, include all clinics
+        for clinic in clinics:
+            if clinic.get("latitude") and clinic.get("longitude"):
+                clinic_location = (clinic["latitude"], clinic["longitude"])
+                distance = geodesic(user_location, clinic_location).kilometers
+                
                 clinic['id'] = clinic.pop('_id')
                 clinic["distance"] = round(distance * 1000, 2)  # Convert to meters
                 clinic["within_range"] = True
                 clinics_with_distance.append(clinic)
+    else:
+        # If not WFH, only include clinics within 100 meters
+        # 100 meters = 0.1 kilometers
+        MAX_DISTANCE = 0.1
+        
+        for clinic in clinics:
+            if clinic.get("latitude") and clinic.get("longitude"):
+                clinic_location = (clinic["latitude"], clinic["longitude"])
+                distance = geodesic(user_location, clinic_location).kilometers
+
+                if distance <= MAX_DISTANCE:  # Within 100 meters
+                    clinic['id'] = clinic.pop('_id')
+                    clinic["distance"] = round(distance * 1000, 2)  # Convert to meters
+                    clinic["within_range"] = True
+                    clinics_with_distance.append(clinic)
 
     # Sort by distance and apply pagination
     clinics_with_distance.sort(key=lambda x: x["distance"])
@@ -341,3 +357,111 @@ async def add_clinic_from_google_employee(
         return HospitalResponse(**clinic_data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to add clinic: {str(e)}")
+
+@router.post("/admin/clinics/manual", response_model=HospitalResponse)
+async def add_clinic_manually_admin(
+    request: HospitalManualCreate,
+    admin: dict = Depends(get_current_admin),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Manually add a hospital/clinic/warehouse by admin"""
+    organization_id = admin.get("organization_id")
+    if not organization_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Check for duplicates by name and address
+    existing = await clinic_collection.find_one({
+        "name": request.name,
+        "address": request.address,
+        "organization_id": organization_id
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="A facility with this name and address already exists")
+
+    # Generate CLN ID
+    clinic_id = generate_random_id("CLN")
+
+    clinic_data = {
+        "_id": clinic_id,  # Use the CLN ID as MongoDB _id
+        "id": clinic_id,   # Keep this for consistency
+        "name": request.name,
+        "address": request.address,
+        "city": request.city,
+        "state": request.state,
+        "country": request.country,
+        "pincode": request.pincode,
+        "latitude": request.latitude,
+        "longitude": request.longitude,
+        "phone": request.phone,
+        "website": request.website,
+        "specialties": request.specialties,
+        "organization_id": organization_id,
+        "added_by": admin["admin_id"],
+        "added_by_role": "admin",
+        "created_at": get_current_datetime(),
+        "source": "manual",
+        "status": "active",
+        "type": request.type
+    }
+
+    try:
+        await clinic_collection.insert_one(clinic_data)
+        # Remove _id from response
+        clinic_data.pop('_id', None)
+        return HospitalResponse(**clinic_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add facility: {str(e)}")
+
+@router.post("/employee/clinics/manual", response_model=HospitalResponse)
+async def add_clinic_manually_employee(
+    request: HospitalManualCreate,
+    employee: dict = Depends(get_current_employee),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Manually add a hospital/clinic/warehouse by employee"""
+    organization_id = employee.get("organization_id")
+    if not organization_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Check for duplicates by name and address
+    existing = await clinic_collection.find_one({
+        "name": request.name,
+        "address": request.address,
+        "organization_id": organization_id
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="A facility with this name and address already exists")
+
+    # Generate CLN ID
+    clinic_id = generate_random_id("CLN")
+
+    clinic_data = {
+        "_id": clinic_id,  # Use the CLN ID as MongoDB _id
+        "id": clinic_id,   # Keep this for consistency
+        "name": request.name,
+        "address": request.address,
+        "city": request.city,
+        "state": request.state,
+        "country": request.country,
+        "pincode": request.pincode,
+        "latitude": request.latitude,
+        "longitude": request.longitude,
+        "phone": request.phone,
+        "website": request.website,
+        "specialties": request.specialties,
+        "organization_id": organization_id,
+        "added_by": employee["employee_id"],
+        "added_by_role": "employee",
+        "created_at": get_current_datetime(),
+        "source": "manual",
+        "status": "active",
+        "type": request.type
+    }
+
+    try:
+        await clinic_collection.insert_one(clinic_data)
+        # Remove _id from response
+        clinic_data.pop('_id', None)
+        return HospitalResponse(**clinic_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to add facility: {str(e)}")

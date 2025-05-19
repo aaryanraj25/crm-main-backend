@@ -17,8 +17,8 @@ class ClientBase(BaseModel):
     designation: str = Field(..., description="Client designation")
     department: str = Field(..., description="Client department")
     clinic_id: str = Field(..., description="Clinic ID")
-    mobile: str = Field(..., pattern="^[0-9]{10}$", description="10-digit mobile number")
-    email: EmailStr = Field(..., description="Email address")
+    mobile: Optional[str] = Field(None, pattern="^[0-9]{10}$", description="Optional 10-digit mobile number")
+    email: Optional[EmailStr] = Field(None, description="Optional email address")
     capacity: ClientCapacity = Field(..., description="Client capacity")
 
 class ClientCreate(ClientBase):
@@ -37,4 +37,3 @@ class ClientResponse(ClientBase, TimeStampedModel):
     clinic_name: str
     organization_id: str
     created_by: str
-

@@ -112,6 +112,22 @@ async def meeting_check_out(
 
     if "check_out_time" in meeting:
         raise HTTPException(status_code=400, detail="Already checked out")
+    
+    # Check if 10 minutes have elapsed since check-in
+    current_time = datetime.now()
+    check_in_time = meeting["check_in_time"]
+    min_checkout_time = check_in_time + timedelta(minutes=10)
+    
+    if current_time < min_checkout_time:
+        # Calculate remaining time in minutes and seconds
+        remaining_time = min_checkout_time - current_time
+        remaining_minutes = int(remaining_time.total_seconds() // 60)
+        remaining_seconds = int(remaining_time.total_seconds() % 60)
+        
+        raise HTTPException(
+            status_code=429,  # Too Many Requests status code for rate limiting
+            detail=f"Cannot check out before 10 minutes have elapsed. {remaining_minutes}m {remaining_seconds}s remaining."
+        )
 
     # Create order if products are provided
     order_id = None
@@ -124,8 +140,8 @@ async def meeting_check_out(
             OrderItem(
                 product_id=p.product_id,
                 name=p.name,
-                quantity=p.quantity,
-                price=p.price,
+                quantity=p.quantity if hasattr(p, 'quantity') else None,
+                price=p.price if hasattr(p, 'price') else None,
                 total=p.total
             ) for p in request.products
         ]
@@ -212,7 +228,7 @@ async def get_first_meetings(
     if clinic_id:
         query["clinic_id"] = clinic_id
 
-    meetings = await meetings_collection.find(query) \
+    meetings = await visits_collection.find(query) \
         .sort("check_in_time", -1) \
         .skip(skip) \
         .limit(limit) \
@@ -224,31 +240,6 @@ async def get_first_meetings(
         meeting["client"] = client
 
     return [MeetingResponse(**meeting) for meeting in meetings]
-
-@router.get("/active", response_model=Optional[MeetingResponse])
-async def get_active_meeting(
-    employee: dict = Depends(get_current_employee),
-    db: AsyncIOMotorDatabase = Depends(get_database)
-):
-    """Get employee's active meeting"""
-    employee_id = employee.get("employee_id")
-    organization_id = employee.get("organization_id")
-
-    if not organization_id:
-        raise HTTPException(status_code=401, detail="Organization ID is required")
-
-    meeting = await meetings_collection.find_one({
-        "employee_id": employee_id,
-        "organization_id": organization_id,
-        "check_out_time": {"$exists": False}
-    })
-
-    if meeting:
-        client = await client_collection.find_one({"_id": meeting["client_id"]})
-        meeting["client"] = client
-        return MeetingResponse(**meeting)
-
-    return None
 
 @router.get("/completed", response_model=List[MeetingResponse])
 async def get_completed_meetings(
@@ -263,7 +254,8 @@ async def get_completed_meetings(
     employee: dict = Depends(get_current_employee),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    """Get completed meetings with filters"""
+    """Get completed meetings with filters, ensuring employee-specific client meetings"""
+    employee_id = employee.get("employee_id")
     organization_id = employee.get("organization_id")
 
     if not organization_id:
@@ -272,6 +264,7 @@ async def get_completed_meetings(
     # Build query
     query = {
         "organization_id": organization_id,
+        "employee_id": employee_id,
         "check_out_time": {"$exists": True}
     }
 
@@ -291,7 +284,7 @@ async def get_completed_meetings(
             {"client.name": {"$regex": search, "$options": "i"}}
         ]
 
-    meetings = await meetings_collection.find(query) \
+    meetings = await visits_collection.find(query) \
         .sort("check_out_time", -1) \
         .skip(skip) \
         .limit(limit) \
@@ -303,6 +296,39 @@ async def get_completed_meetings(
         meeting["client"] = client
 
     return [MeetingResponse(**meeting) for meeting in meetings]
+
+@router.get("/active", response_model=Optional[MeetingResponse])
+async def get_active_meeting(
+    client_id: Optional[str] = None,
+    employee: dict = Depends(get_current_employee),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """Get employee's active meeting, optionally filtered by client"""
+    employee_id = employee.get("employee_id")
+    organization_id = employee.get("organization_id")
+
+    if not organization_id:
+        raise HTTPException(status_code=401, detail="Organization ID is required")
+
+    # Build query
+    query = {
+        "employee_id": employee_id,
+        "organization_id": organization_id,
+        "check_out_time": {"$exists": False}
+    }
+
+    # Add client_id filter if provided
+    if client_id:
+        query["client_id"] = client_id
+
+    meeting = await visits_collection.find_one(query)
+
+    if meeting:
+        client = await client_collection.find_one({"_id": meeting["client_id"]})
+        meeting["client"] = client
+        return MeetingResponse(**meeting)
+
+    return None
 
 @router.get("/summary", response_model=MeetingSummary)
 async def get_meetings_summary(
@@ -331,7 +357,7 @@ async def get_meetings_summary(
             date_query["$lte"] = end_date
         query["check_in_time"] = date_query
 
-    meetings = await meetings_collection.find(query).to_list(length=None)
+    meetings = await visits_collection.find(query).to_list(length=None)
 
     # Calculate summary
     meeting_types_count = {}

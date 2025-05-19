@@ -46,3 +46,18 @@ class HospitalList(BaseModel):
     work_mode: Optional[str]
     coordinates_provided: Optional[bool]
     hospitals: List[HospitalResponse]
+
+class HospitalManualCreate(BaseModel):
+    """Schema for manually adding a hospital/clinic/warehouse"""
+    name: str
+    address: str
+    city: str
+    state: str
+    country: str = "India"
+    pincode: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    type: HospitalType = HospitalType.HOSPITAL
+    specialties: Optional[str] = None

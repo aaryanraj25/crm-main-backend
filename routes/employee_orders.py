@@ -103,7 +103,10 @@ async def create_employee_order(
     if not clinic:
         raise HTTPException(status_code=404, detail="Clinic not found")
 
-    # Validate products
+    # Validate products and recalculate totals to ensure accuracy
+    validated_items = []
+    calculated_total = 0
+    
     for item in order.items:
         product = await product_collection.find_one({
             "_id": item.product_id,
@@ -114,6 +117,28 @@ async def create_employee_order(
                 status_code=404,
                 detail=f"Product not found: {item.name}"
             )
+        
+        # Verify price from database
+        item_total = product["price"] * item.quantity
+        validated_item = item.model_dump()
+        validated_item["price"] = product["price"]
+        validated_item["total"] = item_total
+        validated_items.append(validated_item)
+        calculated_total += item_total
+
+    # Validate order status - only allow PROSPECTIVE or PENDING for new orders
+    if order.status not in [OrderStatus.PROSPECTIVE, OrderStatus.PENDING]:
+        raise HTTPException(
+            status_code=400, 
+            detail="New orders can only have PROSPECTIVE or PENDING status"
+        )
+
+    # Check if total amount matches calculated total (with small tolerance for floating point)
+    if abs(calculated_total - order.total_amount) > 0.01:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order total amount ({order.total_amount}) does not match calculated total ({calculated_total})"
+        )
 
     order_id = generate_order_id()
     order_data = order.model_dump()
@@ -121,15 +146,18 @@ async def create_employee_order(
         "_id": order_id,
         "organization_id": organization_id,
         "employee_id": employee_id,
+        "items": validated_items,
         "created_at": get_current_datetime(),
-        "status": OrderStatus.PROSPECTIVE
+        "updated_at": None,
+        # Use the status provided in the order
     })
 
     await orders_collection.insert_one(order_data)
 
     return {
         "message": "Order created successfully",
-        "order_id": order_id
+        "order_id": order_id,
+        "status": order.status
     }
 
 @router.put("/employee/orders/{order_id}")

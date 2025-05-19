@@ -47,7 +47,6 @@ class CheckInRequest(BaseModel):
     longitude: float
 
 class CheckOutRequest(BaseModel):
-    meeting_person: MeetingPerson
     notes: Optional[str]
 
 class Location(BaseModel):

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time
 from geopy.distance import geodesic
 from pydantic import BaseModel, Field
 
@@ -371,6 +371,14 @@ async def check_out(
     if "check_out_time" in visit:
         raise HTTPException(status_code=400, detail="Already checked out")
 
+    # Get current UTC time
+    now_utc = datetime.now(timezone.utc)
+    auto_checkout_time = time(18, 29)  # 6:29 PM UTC
+
+    # If time is before 6:29 PM UTC and this is a manual request, allow check-out
+    if now_utc.time() < auto_checkout_time and not request.notes:
+        raise HTTPException(status_code=400, detail="Too early to auto check out")
+
     locations = visit.get("locations", [])
     total_distance = sum(
         geodesic(
@@ -380,12 +388,12 @@ async def check_out(
         for i in range(len(locations) - 1)
     )
 
+    # Perform the update
     await visits_collection.update_one(
         {"_id": visit_id},
         {
             "$set": {
-                "check_out_time": get_current_datetime(),
-                "meeting_person": request.meeting_person.dict(),
+                "check_out_time": now_utc,
                 "notes": request.notes,
                 "total_distance": round(total_distance, 2)
             }
@@ -396,6 +404,7 @@ async def check_out(
         "message": "Check-out successful",
         "total_distance": round(total_distance, 2)
     }
+
 
 @router.post("/orders/add")
 async def add_order(

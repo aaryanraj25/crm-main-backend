@@ -1,5 +1,5 @@
 from enum import Enum
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
@@ -12,8 +12,8 @@ class OrderStatus(str, Enum):
 class OrderItem(BaseModel):
     product_id: str
     name: str
-    quantity: int
-    price: float
+    quantity: Optional[int] = None
+    price: Optional[float] = None
     total: float
 
 class OrderCreate(BaseModel):
@@ -21,7 +21,7 @@ class OrderCreate(BaseModel):
     items: List[OrderItem]
     notes: Optional[str] = None
     total_amount: float
-    status: OrderStatus = OrderStatus.PROSPECTIVE
+    status: OrderStatus
 
 class OrderResponse(BaseModel):
     order_id: str
@@ -37,5 +37,3 @@ class OrderResponse(BaseModel):
     updated_at: Optional[datetime]
     created_by_name: str
     clinic_name: str
-
-

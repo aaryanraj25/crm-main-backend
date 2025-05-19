@@ -312,3 +312,73 @@ async def bulk_update_products(
         "message": f"Updated {updated_count} products",
         "errors": errors if errors else None
     }
+
+@router.get("/employee/list")
+async def list_products_employee(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    employee: dict = Depends(get_current_employee)
+):
+    """
+    Endpoint for employees to list products with optional filtering and search
+    """
+    organization_id = employee.get("organization_id")
+    if not organization_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Build query - only show active products to employees
+    query = {
+        "organization_id": organization_id,
+        "is_active": True  # Only show active products
+    }
+
+    if category:
+        query["category"] = category
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"manufacturer": {"$regex": search, "$options": "i"}},
+            {"description": {"$regex": search, "$options": "i"}}
+        ]
+
+    # Get total count
+    total_count = await product_collection.count_documents(query)
+
+    # Get products with pagination
+    products = await product_collection.find(query) \
+        .sort("created_at", -1) \
+        .skip(skip) \
+        .limit(limit) \
+        .to_list(length=limit)
+
+    return {
+        "total": total_count,
+        "products": products,
+        "page": skip // limit + 1,
+        "pages": (total_count + limit - 1) // limit
+    }
+
+@router.get("/employee/product/{product_id}")
+async def get_product_employee(
+    product_id: str,
+    employee: dict = Depends(get_current_employee)
+):
+    """
+    Endpoint for employees to get details of a specific product
+    """
+    organization_id = employee.get("organization_id")
+    if not organization_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    product = await product_collection.find_one({
+        "_id": product_id,
+        "organization_id": organization_id,
+        "is_active": True
+    })
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    return product
