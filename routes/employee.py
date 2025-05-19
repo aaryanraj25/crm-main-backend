@@ -111,6 +111,47 @@ async def clock_in(
         "work_from_home": work_from_home
     }
 
+@router.get("/clock-in-time")
+async def get_clock_in_time(
+    employee: dict = Depends(get_current_employee),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    attendance_collection = db["attendance"]
+    employee_id = employee.get("employee_id")
+
+    if not employee_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    attendance_entry = await attendance_collection.find_one({
+        "employee_id": employee_id,
+        "date": today
+    })
+
+    if not attendance_entry:
+        raise HTTPException(status_code=404, detail="No clock-in record found for today")
+
+    response = {
+        "attendance_id": attendance_entry["_id"],
+        "clock_in_time": attendance_entry["clock_in_time"],
+        "work_from_home": attendance_entry.get("work_from_home", False)
+    }
+
+    # Add clock-out information if available
+    if "clock_out_time" in attendance_entry:
+        response["clock_out_time"] = attendance_entry["clock_out_time"]
+        response["total_hours"] = attendance_entry.get("total_hours", 0)
+
+    # Add location information if available
+    if "clock_in_location" in attendance_entry:
+        response["clock_in_location"] = attendance_entry["clock_in_location"]
+    
+    if "clock_out_location" in attendance_entry:
+        response["clock_out_location"] = attendance_entry["clock_out_location"]
+
+    return response
+
 @router.post("/clock-out")
 async def clock_out(
     location: LocationData = Depends(),
