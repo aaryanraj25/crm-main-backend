@@ -1071,11 +1071,11 @@ async def get_employee_details(
     
     # Format attendance as "days attended / total days"
     attendance_summary = {
-        "attended_days": active_days,
-        "total_days": effective_days,
-        "ratio": f"{active_days}/{effective_days}",
-        "percentage": round((active_days / effective_days) * 100, 2) if effective_days > 0 else 0,
-        "records": attendance_records  # Include detailed records for reference
+    "attended_days": len(attendance_records),
+    "total_days": effective_days,
+    "ratio": f"{len(attendance_records)}/{effective_days}",
+    "percentage": round((len(attendance_records) / effective_days) * 100, 2) if effective_days > 0 else 0,
+    "records": attendance_records  # Include detailed records for reference
     }
 
     # Clients
